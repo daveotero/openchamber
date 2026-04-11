@@ -1,7 +1,7 @@
 # OpenCode Module Documentation
 
 ## Purpose
-This module provides OpenCode server integration utilities for the web server runtime, including configuration management, provider authentication, and UI authentication with rate limiting.
+This module provides OpenCode server integration utilities for the web server runtime, including configuration management and provider authentication.
 
 ## Entrypoints and structure
 - `packages/web/server/lib/opencode/index.js`: public entrypoint (currently baseline placeholder).
@@ -40,8 +40,8 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/session-runtime.js`: session status/attention/activity runtime for OpenCode SSE events.
 - `packages/web/server/lib/opencode/watcher.js`: global SSE watcher runtime for push/session event fanout.
 - `packages/web/server/lib/opencode/shared.js`: shared utilities for config, markdown, skills, and git helpers.
-- `packages/web/server/lib/opencode/ui-auth.js`: UI session authentication with rate limiting.
-- `packages/web/server/lib/opencode/ui-passkeys.js`: UI passkey storage and WebAuthn registration/authentication helpers.
+- `packages/web/server/lib/ui-auth/ui-auth.js`: UI session authentication runtime (outside OpenCode module).
+- `packages/web/server/lib/ui-auth/ui-passkeys.js`: UI passkey storage and WebAuthn registration/authentication helpers (outside OpenCode module).
 
 ## Public exports (auth.js)
 - `readAuthFile()`: Reads and parses `~/.local/share/opencode/auth.json`.
@@ -67,15 +67,6 @@ This module provides OpenCode server integration utilities for the web server ru
 - `addSkillFromMdFile(skillsMap, skillMdPath, scope, source)`: Parses and indexes a skill file.
 - `resolveSkillSearchDirectories(workingDirectory)`: Returns skill search path order (config, project, home, custom).
 - `listSkillSupportingFiles(skillDir)`, `readSkillSupportingFile(skillDir, relativePath)`, `writeSkillSupportingFile(skillDir, relativePath, content)`, `deleteSkillSupportingFile(skillDir, relativePath)`: Skill supporting file management.
-
-## Public exports (ui-auth.js)
-- `createUiAuth({ password, cookieName, sessionTtlMs })`: Creates UI auth instance with methods:
-  - `enabled`: Boolean indicating if auth is configured.
-  - `requireAuth(req, res, next)`: Express middleware to enforce authentication.
-  - `handleSessionStatus(req, res)`: Returns authentication status.
-  - `handleSessionCreate(req, res)`: Handles login with rate limiting.
-  - `ensureSessionToken(req, res)`: Returns or creates session token.
-  - `dispose()`: Cleans up timers and state.
 
 ## Public exports (routes.js)
 - `registerOpenCodeRoutes(app, dependencies)`: Registers OpenCode-owned HTTP routes and internal module runtime:
