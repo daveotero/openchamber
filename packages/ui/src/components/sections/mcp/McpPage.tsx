@@ -1522,7 +1522,6 @@ export const McpPage: React.FC = () => {
                   </Button>
                 </div>
               </div>
-              </div>
             </div>
 
           </section>
