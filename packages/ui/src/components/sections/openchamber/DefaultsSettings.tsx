@@ -30,6 +30,7 @@ export const DefaultsSettings: React.FC = () => {
   const setSettingsDefaultModel = useConfigStore((state) => state.setSettingsDefaultModel);
   const setSettingsDefaultVariant = useConfigStore((state) => state.setSettingsDefaultVariant);
   const setSettingsDefaultAgent = useConfigStore((state) => state.setSettingsDefaultAgent);
+  const setSettingsDefaultFileViewerPreview = useConfigStore((state) => state.setSettingsDefaultFileViewerPreview);
   const showDeletionDialog = useUIStore((state) => state.showDeletionDialog);
   const setShowDeletionDialog = useUIStore((state) => state.setShowDeletionDialog);
   const providers = useConfigStore((state) => state.providers);
@@ -37,6 +38,7 @@ export const DefaultsSettings: React.FC = () => {
   const [defaultModel, setDefaultModel] = React.useState<string | undefined>();
   const [defaultVariant, setDefaultVariant] = React.useState<string | undefined>();
   const [defaultAgent, setDefaultAgent] = React.useState<string | undefined>();
+  const [defaultFileViewerPreview, setDefaultFileViewerPreview] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(true);
 
   const parsedModel = React.useMemo(() => getDisplayModel(defaultModel), [defaultModel]);
@@ -48,6 +50,7 @@ export const DefaultsSettings: React.FC = () => {
           defaultModel?: string;
           defaultVariant?: string;
           defaultAgent?: string;
+          defaultFileViewerPreview?: boolean;
         } | null = null;
 
         if (!data) {
@@ -64,6 +67,9 @@ export const DefaultsSettings: React.FC = () => {
                       ? ((settings as Record<string, unknown>).defaultVariant as string)
                       : undefined,
                   defaultAgent: typeof settings.defaultAgent === 'string' ? settings.defaultAgent : undefined,
+                  defaultFileViewerPreview: typeof (settings as Record<string, unknown>).defaultFileViewerPreview === 'boolean'
+                    ? ((settings as Record<string, unknown>).defaultFileViewerPreview as boolean)
+                    : undefined,
                 };
               }
             } catch {
@@ -99,6 +105,7 @@ export const DefaultsSettings: React.FC = () => {
           if (model !== undefined) setDefaultModel(model);
           if (variant !== undefined) setDefaultVariant(variant);
           if (agent !== undefined) setDefaultAgent(agent);
+          if (typeof data.defaultFileViewerPreview === 'boolean') setDefaultFileViewerPreview(data.defaultFileViewerPreview);
         }
       } catch (error) {
         console.warn('Failed to load defaults settings:', error);
@@ -298,6 +305,31 @@ export const DefaultsSettings: React.FC = () => {
         >
           <Checkbox checked={showDeletionDialog} onChange={setShowDeletionDialog} ariaLabel="Show deletion dialog" />
           <span className="typography-ui-label text-foreground">Show Deletion Dialog</span>
+        </div>
+
+        <div
+          className="group flex cursor-pointer items-center gap-2 py-1"
+          role="button"
+          tabIndex={0}
+          aria-pressed={defaultFileViewerPreview}
+          onClick={() => {
+            const next = !defaultFileViewerPreview;
+            setDefaultFileViewerPreview(next);
+            setSettingsDefaultFileViewerPreview(next);
+            updateDesktopSettings({ defaultFileViewerPreview: next }).catch(console.warn);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              const next = !defaultFileViewerPreview;
+              setDefaultFileViewerPreview(next);
+              setSettingsDefaultFileViewerPreview(next);
+              updateDesktopSettings({ defaultFileViewerPreview: next }).catch(console.warn);
+            }
+          }}
+        >
+          <Checkbox checked={defaultFileViewerPreview} onChange={setDefaultFileViewerPreview} ariaLabel="Open files in preview mode" />
+          <span className="typography-ui-label text-foreground">Open files in preview mode</span>
         </div>
 
       </section>
