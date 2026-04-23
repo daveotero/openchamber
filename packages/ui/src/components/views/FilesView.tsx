@@ -1875,6 +1875,17 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
 
     // Respect per-type localStorage preference when available,
     // falling back to the setting-derived default when nothing is stored.
+    let mdDefault: 'preview' | 'edit' = settingsDefaultFileViewerPreview ? 'preview' : 'edit';
+    try {
+      const stored = localStorage.getItem(MD_VIEWER_MODE_KEY);
+      if (stored === 'preview' || stored === 'edit') {
+        mdDefault = stored;
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+    setMdViewMode(mdDefault);
+
     let htmlDefault: 'preview' | 'edit' = settingsDefaultFileViewerPreview ? 'preview' : 'edit';
     try {
       const stored = localStorage.getItem(HTML_VIEWER_MODE_KEY);
@@ -1886,19 +1897,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     }
     setHtmlViewMode(htmlDefault);
   }, [selectedFile?.path, settingsDefaultFileViewerPreview]);
-
-  React.useEffect(() => {
-    try {
-      const stored = localStorage.getItem(MD_VIEWER_MODE_KEY);
-      if (stored === 'preview') {
-        setMdViewMode('preview');
-      } else if (stored === 'edit') {
-        setMdViewMode('edit');
-      }
-    } catch {
-      // Ignore localStorage errors
-    }
-  }, []);
 
   const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     setMdViewMode(mode);
