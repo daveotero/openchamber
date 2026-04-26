@@ -517,11 +517,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         }
     }, [isAgentSelectorOpen, isCompact]);
 
-    // Reset selected index when search query changes
-    React.useEffect(() => {
-        setModelSelectedIndex(0);
-    }, [desktopModelQuery]);
-
     const selectableDesktopAgents = React.useMemo(() => {
         return agents.filter((agent) => agent.mode !== 'subagent');
     }, [agents]);
@@ -595,6 +590,79 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             })
             .filter((provider) => provider.models.length > 0);
     }, [providers, hiddenModels]);
+
+    const getDesktopModelPickerSelectedIndex = React.useCallback((query: string) => {
+        const normalizedQuery = query.trim();
+        const forceExpandProviders = normalizedQuery.length > 0;
+        const matchesQuery = (modelName: string, providerName: string) => {
+            if (!normalizedQuery) return true;
+            return matchesModelSearch(modelName, normalizedQuery) || matchesModelSearch(providerName, normalizedQuery);
+        };
+
+        let flatIndex = 0;
+
+        for (const { model, providerID, modelID } of favoriteModelsList) {
+            const provider = providers.find((entry) => entry.id === providerID);
+            const providerName = provider?.name || providerID;
+            const modelName = getModelDisplayName(model);
+            if (!matchesQuery(modelName, providerName)) {
+                continue;
+            }
+            if (providerID === currentProviderId && modelID === currentModelId) {
+                return flatIndex;
+            }
+            flatIndex += 1;
+        }
+
+        for (const { model, providerID, modelID } of recentModelsList) {
+            const provider = providers.find((entry) => entry.id === providerID);
+            const providerName = provider?.name || providerID;
+            const modelName = getModelDisplayName(model);
+            if (!matchesQuery(modelName, providerName)) {
+                continue;
+            }
+            if (providerID === currentProviderId && modelID === currentModelId) {
+                return flatIndex;
+            }
+            flatIndex += 1;
+        }
+
+        for (const provider of visibleProviders) {
+            const providerId = typeof provider.id === 'string' ? provider.id : '';
+            const providerName = provider.name || providerId;
+            const providerModels = Array.isArray(provider.models) ? (provider.models as ProviderModel[]) : [];
+            const filteredModels = providerModels.filter((model) => matchesQuery(getModelDisplayName(model), providerName));
+            const isExpanded = forceExpandProviders || !collapsedProviderSet.has(providerId);
+            if (!isExpanded) {
+                continue;
+            }
+            for (const model of filteredModels) {
+                const modelId = typeof model.id === 'string' ? model.id : '';
+                if (providerId === currentProviderId && modelId === currentModelId) {
+                    return flatIndex;
+                }
+                flatIndex += 1;
+            }
+        }
+
+        return 0;
+    }, [
+        collapsedProviderSet,
+        currentModelId,
+        currentProviderId,
+        favoriteModelsList,
+        matchesModelSearch,
+        providers,
+        recentModelsList,
+        visibleProviders,
+    ]);
+
+    React.useEffect(() => {
+        if (!isModelSelectorOpen) {
+            return;
+        }
+        setModelSelectedIndex(getDesktopModelPickerSelectedIndex(desktopModelQuery));
+    }, [desktopModelQuery, getDesktopModelPickerSelectedIndex, isModelSelectorOpen]);
 
     const currentMetadata =
         currentProviderId && currentModelId ? getModelMetadata(currentProviderId, currentModelId) : undefined;
