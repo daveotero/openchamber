@@ -4,6 +4,7 @@ import type { SidebarSection } from '@/constants/sidebar';
 import { getSafeStorage } from './utils/safeStorage';
 import { SEMANTIC_TYPOGRAPHY, getTypographyVariable, type SemanticTypographyKey } from '@/lib/typography';
 import type { ShortcutCombo } from '@/lib/shortcuts';
+import { DEFAULT_MONO_FONT, DEFAULT_UI_FONT, type MonoFontOption, type UiFontOption } from '@/lib/fontOptions';
 
 export type MainTab = 'chat' | 'plan' | 'git' | 'diff' | 'terminal' | 'files';
 export type RightSidebarTab = 'git' | 'files' | 'context';
@@ -482,7 +483,6 @@ interface UIStore {
   pendingFileNavigation: PendingFileNavigation | null;
   pendingFileFocusPath: string | null;
   isMobile: boolean;
-  isKeyboardOpen: boolean;
   isQuickOpenOpen: boolean;
   isCommandPaletteOpen: boolean;
   isHelpDialogOpen: boolean;
@@ -513,6 +513,8 @@ interface UIStore {
   messageLimit: number;
   fontSize: number;
   terminalFontSize: number;
+  uiFont: UiFontOption;
+  monoFont: MonoFontOption;
   padding: number;
   cornerRadius: number;
   inputBarOffset: number;
@@ -634,10 +636,11 @@ interface UIStore {
   setMessageLimit: (value: number) => void;
   setFontSize: (size: number) => void;
   setTerminalFontSize: (size: number) => void;
+  setUiFont: (font: UiFontOption) => void;
+  setMonoFont: (font: MonoFontOption) => void;
   setPadding: (size: number) => void;
   setCornerRadius: (radius: number) => void;
   setInputBarOffset: (offset: number) => void;
-  setKeyboardOpen: (open: boolean) => void;
   applyTypography: () => void;
   applyPadding: () => void;
   updateProportionalSidebarWidths: () => void;
@@ -731,7 +734,6 @@ export const useUIStore = create<UIStore>()(
         pendingFileNavigation: null,
         pendingFileFocusPath: null,
         isMobile: false,
-        isKeyboardOpen: false,
         isQuickOpenOpen: false,
         isCommandPaletteOpen: false,
         isHelpDialogOpen: false,
@@ -760,6 +762,8 @@ export const useUIStore = create<UIStore>()(
         messageLimit: 200,
         fontSize: 100,
         terminalFontSize: 13,
+        uiFont: DEFAULT_UI_FONT,
+        monoFont: DEFAULT_MONO_FONT,
         padding: 100,
         cornerRadius: 18,
         inputBarOffset: 0,
@@ -1380,6 +1384,14 @@ export const useUIStore = create<UIStore>()(
           set({ terminalFontSize: clamped });
         },
 
+        setUiFont: (font) => {
+          set({ uiFont: font });
+        },
+
+        setMonoFont: (font) => {
+          set({ monoFont: font });
+        },
+
         setPadding: (size) => {
           // Clamp between 50% and 200%
           const clampedSize = Math.max(50, Math.min(200, size));
@@ -1475,10 +1487,6 @@ export const useUIStore = create<UIStore>()(
  
         setInputBarOffset: (offset) => {
           set({ inputBarOffset: offset });
-        },
-
-        setKeyboardOpen: (open) => {
-          set((state) => state.isKeyboardOpen === open ? state : { isKeyboardOpen: open });
         },
 
         toggleFavoriteModel: (providerID, modelID) => {
@@ -1953,6 +1961,8 @@ export const useUIStore = create<UIStore>()(
           messageLimit: state.messageLimit,
           fontSize: state.fontSize,
           terminalFontSize: state.terminalFontSize,
+          uiFont: state.uiFont,
+          monoFont: state.monoFont,
           padding: state.padding,
           cornerRadius: state.cornerRadius,
           favoriteModels: state.favoriteModels,
