@@ -1668,13 +1668,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             providerId,
             modelId,
             showProviderLogo,
-            showCapabilities,
         }: {
             model: ProviderModel;
             providerId: string;
             modelId: string;
             showProviderLogo: boolean;
-            showCapabilities: boolean;
         }) => {
             const rowKey = buildModelRefKey(providerId, modelId);
             const isSelected = providerId === currentProviderId && modelId === currentModelId;
@@ -1686,8 +1684,15 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const isExpanded = expandedMobileModelKey === rowKey;
             const inlineVariantOptions = [undefined, ...variantOptions].slice(0, MAX_INLINE_MOBILE_VARIANT_OPTIONS);
             const hasVariantOverflow = variantOptions.length + 1 > MAX_INLINE_MOBILE_VARIANT_OPTIONS;
-            const capabilityIcons = showCapabilities ? getCapabilityIcons(metadata).slice(0, 3) : [];
-            const inputIcons = showCapabilities ? getModalityIcons(metadata, 'input') : [];
+            const capabilityIcons = getCapabilityIcons(metadata);
+            const modalityIcons = [
+                ...getModalityIcons(metadata, 'input'),
+                ...getModalityIcons(metadata, 'output'),
+            ];
+            const indicatorIcons = Array.from(
+                new Map([...capabilityIcons, ...modalityIcons].map((icon) => [icon.key, icon])).values()
+            );
+            const contextText = metadata?.limit?.context ? `${formatTokens(metadata.limit.context)} ctx` : null;
 
             return (
                 <div
@@ -1709,48 +1714,46 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             {showProviderLogo ? (
                                 <ProviderLogo providerId={providerId} className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                             ) : null}
-                            <div className="flex min-w-0 flex-1 flex-col gap-1">
+                            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                                 <div className="flex min-w-0 items-start gap-2">
                                     <span className="typography-meta font-medium text-foreground truncate">
                                         {getModelDisplayName(model)}
                                     </span>
                                     {isSelected ? <RiCheckLine className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" /> : null}
                                 </div>
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                    {(metadata?.limit?.context || metadata?.limit?.output) ? (
-                                        <div className="typography-micro text-muted-foreground whitespace-nowrap">
-                                            {metadata?.limit?.context ? `${formatTokens(metadata?.limit?.context)} ctx` : ''}
-                                            {metadata?.limit?.context && metadata?.limit?.output ? ' • ' : ''}
-                                            {metadata?.limit?.output ? `${formatTokens(metadata?.limit?.output)} out` : ''}
-                                        </div>
-                                    ) : null}
-                                    {variantLabel ? (
-                                        <span className="typography-micro text-muted-foreground whitespace-nowrap">
-                                            Thinking: {variantLabel}
-                                        </span>
-                                    ) : null}
-                                    {capabilityIcons.length > 0 || inputIcons.length > 0 ? (
-                                        <div className="flex items-center gap-1">
-                                            {[...capabilityIcons, ...inputIcons].map(({ key, icon: IconComponent, label }) => (
+                                {contextText || indicatorIcons.length > 0 ? (
+                                    <div className="flex min-w-0 items-center gap-1.5 overflow-hidden typography-micro text-muted-foreground">
+                                        {contextText ? (
+                                            <span className="whitespace-nowrap flex-shrink-0">
+                                                {contextText}
+                                            </span>
+                                        ) : null}
+                                        {contextText && indicatorIcons.length > 0 ? (
+                                            <span aria-hidden="true" className="h-3 w-px flex-shrink-0 bg-border/50" />
+                                        ) : null}
+                                        {indicatorIcons.length > 0 ? (
+                                            <div className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap pl-0.5">
+                                                {indicatorIcons.map(({ key, icon: IconComponent, label }) => (
                                                 <span
                                                     key={`meta-${providerId}-${modelId}-${key}`}
-                                                    className="flex h-4 w-4 items-center justify-center text-muted-foreground"
+                                                    className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-muted-foreground"
                                                     title={label}
                                                     aria-label={label}
                                                 >
                                                     <IconComponent className="h-3 w-3" />
                                                 </span>
                                             ))}
-                                        </div>
-                                    ) : null}
-                                </div>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
                             </div>
                         </button>
                         {hasVariants ? (
                             <button
                                 type="button"
                                 onClick={() => setExpandedMobileModelKey((prev) => prev === rowKey ? null : rowKey)}
-                                className="flex items-center gap-1 rounded-lg border border-border/40 px-2 py-1 typography-micro font-medium text-muted-foreground hover:bg-interactive-hover/50"
+                                className="flex items-center gap-1 rounded-lg border border-border/40 px-2 py-1 typography-micro font-medium text-muted-foreground hover:bg-interactive-hover/50 flex-shrink-0"
                                 aria-expanded={isExpanded}
                                 aria-label={isExpanded ? 'Hide thinking modes' : 'Show thinking modes'}
                             >
@@ -1758,26 +1761,28 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 {isExpanded ? <RiArrowDownSLine className="h-3.5 w-3.5" /> : <RiArrowRightSLine className="h-3.5 w-3.5" />}
                             </button>
                         ) : null}
-                        <button
-                            type="button"
-                            onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                toggleFavoriteModel(providerId, modelId);
-                            }}
-                            className={cn(
-                                'model-favorite-button flex h-5 w-5 items-center justify-center hover:text-primary/80 flex-shrink-0',
-                                isFavoriteModel(providerId, modelId) ? 'text-primary' : 'text-muted-foreground'
-                            )}
-                            aria-label={isFavoriteModel(providerId, modelId) ? 'Unfavorite' : 'Favorite'}
-                            title={isFavoriteModel(providerId, modelId) ? 'Remove from favorites' : 'Add to favorites'}
-                        >
-                            {isFavoriteModel(providerId, modelId) ? (
-                                <RiStarFill className="h-4 w-4" />
-                            ) : (
-                                <RiStarLine className="h-4 w-4" />
-                            )}
-                        </button>
+                        <div className="flex flex-shrink-0 items-start gap-1.5">
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    toggleFavoriteModel(providerId, modelId);
+                                }}
+                                className={cn(
+                                    'model-favorite-button flex h-5 w-5 items-center justify-center hover:text-primary/80 flex-shrink-0',
+                                    isFavoriteModel(providerId, modelId) ? 'text-primary' : 'text-muted-foreground'
+                                )}
+                                aria-label={isFavoriteModel(providerId, modelId) ? 'Unfavorite' : 'Favorite'}
+                                title={isFavoriteModel(providerId, modelId) ? 'Remove from favorites' : 'Add to favorites'}
+                            >
+                                {isFavoriteModel(providerId, modelId) ? (
+                                    <RiStarFill className="h-4 w-4" />
+                                ) : (
+                                    <RiStarLine className="h-4 w-4" />
+                                )}
+                            </button>
+                        </div>
                     </div>
                     {isExpanded && hasVariants ? (
                         <div className="border-t border-border/30 px-2 py-2">
@@ -1868,7 +1873,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                     providerId: providerID,
                                     modelId: modelID,
                                     showProviderLogo: true,
-                                    showCapabilities: false,
                                 }))}
                             </div>
                         </div>
@@ -1887,7 +1891,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                     providerId: providerID,
                                     modelId: modelID,
                                     showProviderLogo: true,
-                                    showCapabilities: false,
                                 }))}
                             </div>
                         </div>
@@ -1940,7 +1943,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                             providerId: provider.id as string,
                                             modelId: model.id as string,
                                             showProviderLogo: false,
-                                            showCapabilities: true,
                                         }))}
                                     </div>
                                 )}
