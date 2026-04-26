@@ -1711,7 +1711,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const variantLabel = hasVariants ? formatEffortLabel(resolvedVariant) : null;
             const isExpanded = expandedMobileModelKey === rowKey;
             const inlineVariantOptions = [undefined, ...variantOptions].slice(0, MAX_INLINE_MOBILE_VARIANT_OPTIONS);
-            const hasVariantOverflow = variantOptions.length + 1 > MAX_INLINE_MOBILE_VARIANT_OPTIONS;
+            const hasVariantOverflow = inlineVariantOptions.length < variantOptions.length + 1;
             const capabilityIcons = getCapabilityIcons(metadata).map((icon) => ({
                 ...icon,
                 label: localizeMetaLabel(icon.label),
@@ -2642,10 +2642,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             setModelSelectedIndex(0);
         };
 
-        const handleModelMenuOpenChange = (nextOpen: boolean, eventDetails?: { reason?: string }) => {
-            if (!nextOpen && eventDetails?.reason === 'cancelOpen') {
-                return;
-            }
+        const handleModelMenuOpenChange = (nextOpen: boolean) => {
             setAgentMenuOpen(nextOpen);
         };
 
