@@ -315,10 +315,15 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
 
   // Clean up pinned expansion state when pinned paths are removed (e.g., unpinned or filtered out)
   React.useEffect(() => {
+    const pinnedRoots = Array.from(pinnedPaths);
+    const isWithinPinnedRoot = (path: string) => pinnedRoots.some((root) => (
+      path === root || path.startsWith(`${root}/`)
+    ));
+
     setPinnedExpandedPaths(prev => {
       const next = new Set(prev);
       for (const path of prev) {
-        if (!pinnedPaths.has(path)) {
+        if (!isWithinPinnedRoot(path)) {
           next.delete(path);
         }
       }
@@ -327,7 +332,7 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
     setPinnedItemChildren(prev => {
       const next = new Map(prev);
       for (const [path] of prev) {
-        if (!pinnedPaths.has(path)) {
+        if (!isWithinPinnedRoot(path)) {
           next.delete(path);
         }
       }
