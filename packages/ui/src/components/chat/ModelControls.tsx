@@ -1786,7 +1786,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 onClick={() => setExpandedMobileModelKey((prev) => prev === rowKey ? null : rowKey)}
                                 className="flex items-center gap-1 rounded-lg border border-border/40 px-2 py-1 typography-micro font-medium text-muted-foreground hover:bg-interactive-hover/50 flex-shrink-0"
                                 aria-expanded={isExpanded}
-                                aria-label={isExpanded ? 'Hide thinking modes' : 'Show thinking modes'}
+                                aria-label={isExpanded ? t('chat.modelControls.hideThinkingModes') : t('chat.modelControls.showThinkingModes')}
                             >
                                 <span className="whitespace-nowrap">{variantLabel}</span>
                                 {isExpanded ? <RiArrowDownSLine className="h-3.5 w-3.5" /> : <RiArrowRightSLine className="h-3.5 w-3.5" />}
@@ -1846,7 +1846,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                         type="button"
                                         onClick={() => openMobileVariantOverflow(providerId, modelId)}
                                         className="inline-flex items-center rounded-full border border-border/40 px-2.5 py-1 typography-meta font-medium text-muted-foreground hover:bg-interactive-hover/50"
-                                        aria-label="More thinking modes"
+                                        aria-label={t('chat.modelControls.moreThinkingModes')}
                                     >
                                         {t('inlineComment.actions.showMore')}
                                     </button>
@@ -1891,7 +1891,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
                     {!hasResults && (
                         <div className="px-3 py-8 text-center typography-meta text-muted-foreground">
-                            No providers or models match your search.
+                            {t('chat.modelControls.noProvidersOrModelsFound')}
                         </div>
                     )}
 
@@ -2385,8 +2385,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 event.stopPropagation();
                             }}
                             className="model-favorite-drag-handle flex h-4 w-4 items-center justify-center text-muted-foreground hover:text-foreground"
-                            aria-label="Reorder favorite"
-                            title="Drag to reorder favorite"
+                            aria-label={t('chat.modelControls.reorderFavoriteAria')}
+                            title={t('chat.modelControls.reorderFavoriteTitle')}
                         >
                             <RiDragMove2Line className="h-3.5 w-3.5" />
                         </button>
@@ -2879,10 +2879,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             {/* Keyboard hints footer */}
                             <div className="px-3 pt-1 pb-1.5 border-t border-border/40 typography-micro text-muted-foreground">
                                 <div className="flex items-center gap-x-2 whitespace-nowrap overflow-hidden">
-                                    <span>↑↓ navigate</span>
-                                    <span>Tab switch agent</span>
+                                    <span>{t('chat.modelControls.keyboardHintNavigate')}</span>
+                                    <span>{t('chat.modelControls.keyboardHintSwitchAgent')}</span>
                                     <span className={cn(!highlightedSupportsThinking && 'invisible')}>
-                                        ←→ thinking
+                                        {t('chat.modelControls.keyboardHintThinking')}
                                     </span>
                                 </div>
                             </div>

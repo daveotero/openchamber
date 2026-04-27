@@ -1645,13 +1645,17 @@ export const useConfigStore = create<ConfigStore>()(
                         if (currentSessionId) {
                             const existingAgentModel = useSelectionStore.getState().getAgentModelForSession(currentSessionId, agentName);
                             if (existingAgentModel && hasProviderModel(providers, existingAgentModel.providerId, existingAgentModel.modelId)) {
-                                if (currentProviderId !== existingAgentModel.providerId || currentModelId !== existingAgentModel.modelId) {
-                                    const savedVariant = useSelectionStore.getState().getAgentModelVariantForSession(
-                                        currentSessionId,
-                                        agentName,
-                                        existingAgentModel.providerId,
-                                        existingAgentModel.modelId,
-                                    );
+                                const savedVariant = useSelectionStore.getState().getAgentModelVariantForSession(
+                                    currentSessionId,
+                                    agentName,
+                                    existingAgentModel.providerId,
+                                    existingAgentModel.modelId,
+                                );
+                                if (
+                                    currentProviderId !== existingAgentModel.providerId
+                                    || currentModelId !== existingAgentModel.modelId
+                                    || get().currentVariant !== savedVariant
+                                ) {
                                     applyResolvedModelSelection(existingAgentModel.providerId, existingAgentModel.modelId, savedVariant);
                                 }
                                 return;
