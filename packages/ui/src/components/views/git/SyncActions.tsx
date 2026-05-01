@@ -22,6 +22,7 @@ type SyncAction = 'fetch' | 'pull' | 'push' | null;
 interface SyncActionsProps {
   syncAction: SyncAction;
   remotes: GitRemote[];
+  fetchPullRemotes?: GitRemote[];
   onFetch: (remote: GitRemote) => void;
   onPull: (remote: GitRemote) => void;
   onPush: () => void;
@@ -32,11 +33,13 @@ interface SyncActionsProps {
   tooltipDelayMs?: number;
   aheadCount?: number;
   behindCount?: number;
+  trackingBranch?: string | null;
 }
 
 export const SyncActions: React.FC<SyncActionsProps> = ({
   syncAction,
   remotes = [],
+  fetchPullRemotes,
   onFetch,
   onPull,
   onPush,
@@ -47,24 +50,51 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
   tooltipDelayMs = 1000,
   aheadCount = 0,
   behindCount = 0,
+  trackingBranch = null,
 }) => {
   const { t } = useI18n();
   const skipRemoteSelectRef = React.useRef(false);
+  const syncRemotes = fetchPullRemotes ?? remotes;
   const hasNoRemotes = remotes.length === 0;
+  const hasNoSyncRemotes = syncRemotes.length === 0;
   const isRemovingRemote = Boolean(removingRemoteName);
-  const isDisabled = disabled || syncAction !== null || isRemovingRemote || hasNoRemotes;
-  const hasMultipleRemotes = remotes.length > 1;
+  const isBaseDisabled = disabled || syncAction !== null || isRemovingRemote;
+  const isSyncDisabled = isBaseDisabled || hasNoSyncRemotes;
+  const isPushDisabled = isBaseDisabled || hasNoRemotes;
+  const hasMultipleSyncRemotes = syncRemotes.length > 1;
+  const trackingTarget = trackingBranch?.trim() ?? '';
+  const fetchTooltip = trackingTarget
+    ? t('gitView.sync.fetchTrackingTooltip', { tracking: trackingTarget })
+    : t('gitView.sync.fetchTooltip');
+  let pullTooltip = t('gitView.sync.pullTooltip');
+  if (behindCount > 0) {
+    pullTooltip = t('gitView.sync.pullTooltipBehind', { count: behindCount });
+  }
+  if (trackingTarget) {
+    pullTooltip = behindCount > 0
+      ? t('gitView.sync.pullTrackingTooltipBehind', { count: behindCount, tracking: trackingTarget })
+      : t('gitView.sync.pullTrackingTooltip', { tracking: trackingTarget });
+  }
+  let pushTooltip = t('gitView.sync.pushTooltip');
+  if (aheadCount > 0) {
+    pushTooltip = t('gitView.sync.pushTooltipAhead', { count: aheadCount });
+  }
+  if (trackingTarget) {
+    pushTooltip = aheadCount > 0
+      ? t('gitView.sync.pushTrackingTooltipAhead', { count: aheadCount, tracking: trackingTarget })
+      : t('gitView.sync.pushTrackingTooltip', { tracking: trackingTarget });
+  }
 
   const handleFetch = () => {
-    const remote = remotes[0];
-    if (remotes.length === 1 && remote) {
+    const remote = syncRemotes[0];
+    if (syncRemotes.length === 1 && remote) {
       onFetch(remote);
     }
   };
 
   const handlePull = () => {
-    const remote = remotes[0];
-    if (remotes.length === 1 && remote) {
+    const remote = syncRemotes[0];
+    if (syncRemotes.length === 1 && remote) {
       onPull(remote);
     }
   };
@@ -82,7 +112,8 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
     label: string,
     onClick: () => void,
     tooltipText: string,
-    counter?: number
+    counter?: number,
+    buttonDisabled = isSyncDisabled
   ) => {
     const button = (
       <Button
@@ -90,7 +121,7 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
         size="sm"
         className={iconOnly ? 'relative h-8 w-8 px-0' : 'h-8 px-2'}
         onClick={onClick}
-        disabled={isDisabled}
+        disabled={buttonDisabled}
       >
         {syncAction === action ? loadingIcon : icon}
         {!iconOnly && <span className="git-header-label">{label}</span>}
@@ -122,7 +153,8 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
     label: string,
     onSelect: (remote: GitRemote) => void,
     tooltipText: string,
-    counter?: number
+    counter?: number,
+    buttonDisabled = isSyncDisabled
   ) => {
     return (
       <DropdownMenu>
@@ -133,7 +165,7 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
                 variant="ghost"
                 size="sm"
                 className={iconOnly ? 'relative h-8 w-8 px-0' : 'h-8 px-2'}
-                disabled={isDisabled}
+                disabled={buttonDisabled}
               >
                 {syncAction === action ? loadingIcon : icon}
                 {!iconOnly && <span className="git-header-label">{label}</span>}
@@ -153,7 +185,7 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
           <TooltipContent sideOffset={8}>{tooltipText}</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="start" className="min-w-[200px]">
-          {remotes.map((remote) => (
+          {syncRemotes.map((remote) => (
             <DropdownMenuItem
               key={remote.name}
               onSelect={(event) => {
@@ -214,14 +246,16 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
 
   return (
     <div className="flex items-center gap-0.5">
-      {hasMultipleRemotes
+      {hasMultipleSyncRemotes
         ? renderDropdownButton(
             'fetch',
             <RiRefreshLine className="size-4" />,
             <RiLoader4Line className="size-4 animate-spin" />,
             t('gitView.sync.fetch'),
             onFetch,
-            t('gitView.sync.fetchTooltip')
+            fetchTooltip,
+            undefined,
+            isSyncDisabled
           )
         : renderButton(
             'fetch',
@@ -229,20 +263,21 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
             <RiLoader4Line className="size-4 animate-spin" />,
             t('gitView.sync.fetch'),
             handleFetch,
-            t('gitView.sync.fetchTooltip')
+            fetchTooltip,
+            undefined,
+            isSyncDisabled
           )}
 
-      {hasMultipleRemotes
+      {hasMultipleSyncRemotes
         ? renderDropdownButton(
             'pull',
             <RiArrowDownLine className="size-4" />,
             <RiLoader4Line className="size-4 animate-spin" />,
             t('gitView.sync.pull'),
             onPull,
-            behindCount > 0
-              ? t('gitView.sync.pullTooltipBehind', { count: behindCount })
-              : t('gitView.sync.pullTooltip'),
-            behindCount
+            pullTooltip,
+            behindCount,
+            isSyncDisabled
           )
         : renderButton(
             'pull',
@@ -250,10 +285,9 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
             <RiLoader4Line className="size-4 animate-spin" />,
             t('gitView.sync.pull'),
             handlePull,
-            behindCount > 0
-              ? t('gitView.sync.pullTooltipBehind', { count: behindCount })
-              : t('gitView.sync.pullTooltip'),
-            behindCount
+            pullTooltip,
+            behindCount,
+            isSyncDisabled
           )}
 
       {renderButton(
@@ -262,10 +296,9 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
         <RiLoader4Line className="size-4 animate-spin" />,
         t('gitView.sync.push'),
         handlePush,
-        aheadCount > 0
-          ? t('gitView.sync.pushTooltipAhead', { count: aheadCount })
-          : t('gitView.sync.pushTooltip'),
-        aheadCount
+        pushTooltip,
+        aheadCount,
+        isPushDisabled
       )}
     </div>
   );

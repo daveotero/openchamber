@@ -1,8 +1,10 @@
 import React from 'react';
 import {
   RiArrowDownSLine,
+  RiArrowDownLine,
   RiCheckLine,
   RiLoader4Line,
+  RiRefreshLine,
   RiGitBranchLine,
   RiBriefcaseLine,
   RiHomeLine,
@@ -33,17 +35,20 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useI18n } from '@/lib/i18n';
 
 type SyncAction = 'fetch' | 'pull' | 'push' | null;
+type HeaderSyncAction = SyncAction | 'upstreamFetch' | 'upstreamSync';
 
 interface GitHeaderProps {
   status: GitStatus | null;
   localBranches: string[];
   remoteBranches: string[];
   branchInfo: Record<string, { ahead?: number; behind?: number }> | undefined;
-  syncAction: SyncAction;
+  syncAction: HeaderSyncAction;
   remotes: GitRemote[];
   onFetch: (remote: GitRemote) => void;
   onPull: (remote: GitRemote) => void;
   onPush: () => void;
+  onFetchUpstream: (comparison: GitRemoteComparison) => void;
+  onSyncUpstream: (comparison: GitRemoteComparison) => void;
   onRemoveRemote: (remote: GitRemote) => void;
   removingRemoteName: string | null;
   onCheckoutBranch: (branch: string) => void;
@@ -195,46 +200,99 @@ const IdentityDropdown: React.FC<IdentityDropdownProps> = ({
   );
 };
 
-interface UpstreamStatusPillProps {
+interface UpstreamSyncRowProps {
   comparison: GitRemoteComparison;
   trackingBranch: string | null;
+  syncAction: HeaderSyncAction;
+  disabled: boolean;
+  onFetch: (comparison: GitRemoteComparison) => void;
+  onSync: (comparison: GitRemoteComparison) => void;
   tooltipDelayMs?: number;
 }
 
-const UpstreamStatusPill: React.FC<UpstreamStatusPillProps> = ({
+const UpstreamSyncRow: React.FC<UpstreamSyncRowProps> = ({
   comparison,
   trackingBranch,
+  syncAction,
+  disabled,
+  onFetch,
+  onSync,
   tooltipDelayMs = 1000,
 }) => {
   const { t } = useI18n();
   const target = `${comparison.remote}/${comparison.branch}`;
   const isSynced = comparison.ahead === 0 && comparison.behind === 0;
+  const isFetching = syncAction === 'upstreamFetch';
+  const isSyncing = syncAction === 'upstreamSync';
+  const isBusy = syncAction !== null;
   const tooltipText = trackingBranch
     ? t('gitView.header.upstreamTooltipTracking', { target, tracking: trackingBranch })
     : t('gitView.header.upstreamTooltip', { target });
 
   return (
-    <Tooltip delayDuration={tooltipDelayMs}>
-      <TooltipTrigger asChild>
-        <div className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border border-[var(--interactive-border)] bg-[var(--surface-elevated)] px-2 typography-micro text-muted-foreground">
-          <RiGitBranchLine className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate text-foreground/80">{target}</span>
-          {isSynced ? (
-            <span className="tabular-nums text-muted-foreground">{t('gitView.header.upstreamSynced')}</span>
-          ) : (
-            <span className="inline-flex items-center gap-1 tabular-nums">
-              {comparison.ahead > 0 ? (
-                <span className="text-[var(--status-info)]">↑{comparison.ahead}</span>
-              ) : null}
-              {comparison.behind > 0 ? (
-                <span className="text-[var(--status-warning)]">↓{comparison.behind}</span>
-              ) : null}
-            </span>
-          )}
-        </div>
-      </TooltipTrigger>
-      <TooltipContent sideOffset={8}>{tooltipText}</TooltipContent>
-    </Tooltip>
+    <div className="flex h-8 max-w-full items-center gap-1 rounded-md border border-[var(--interactive-border)] bg-[var(--surface-elevated)] px-1.5 typography-micro text-muted-foreground">
+      <Tooltip delayDuration={tooltipDelayMs}>
+        <TooltipTrigger asChild>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <RiGitBranchLine className="size-3.5 shrink-0" />
+            <span className="shrink-0 text-foreground/80">{comparison.remote}</span>
+            {isSynced ? (
+              <span className="truncate tabular-nums text-muted-foreground">{t('gitView.header.upstreamSynced')}</span>
+            ) : (
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                {comparison.ahead > 0 ? (
+                  <span className="text-[var(--status-info)]">↑{comparison.ahead}</span>
+                ) : null}
+                {comparison.behind > 0 ? (
+                  <span className="text-[var(--status-warning)]">↓{comparison.behind}</span>
+                ) : null}
+              </span>
+            )}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent sideOffset={8}>{tooltipText}</TooltipContent>
+      </Tooltip>
+
+      <div className="flex shrink-0 items-center gap-0.5">
+        <Tooltip delayDuration={tooltipDelayMs}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={disabled || isBusy}
+              onClick={() => onFetch(comparison)}
+              aria-label={t('gitView.header.upstreamFetchAria', { target })}
+            >
+              {isFetching ? (
+                <RiLoader4Line className="size-3.5 animate-spin" />
+              ) : (
+                <RiRefreshLine className="size-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent sideOffset={8}>{t('gitView.header.upstreamFetchTooltip', { target })}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip delayDuration={tooltipDelayMs}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={disabled || isBusy}
+              onClick={() => onSync(comparison)}
+              aria-label={t('gitView.header.upstreamSyncAria', { target })}
+            >
+              {isSyncing ? (
+                <RiLoader4Line className="size-3.5 animate-spin" />
+              ) : (
+                <RiArrowDownLine className="size-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent sideOffset={8}>{t('gitView.header.upstreamSyncTooltip', { target })}</TooltipContent>
+        </Tooltip>
+      </div>
+    </div>
   );
 };
 
@@ -248,6 +306,8 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
   onFetch,
   onPull,
   onPush,
+  onFetchUpstream,
+  onSyncUpstream,
   onRemoveRemote,
   removingRemoteName,
   onCheckoutBranch,
@@ -268,6 +328,21 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
   }
 
   const useTwoRowHeader = isMobile;
+  const upstreamComparison = status.upstreamComparison ?? null;
+  const trackedRemoteName = status.tracking?.split('/')[0] ?? null;
+  const trackedRemote = trackedRemoteName
+    ? remotes.find((remote) => remote.name === trackedRemoteName)
+    : undefined;
+  const nonUpstreamRemotes = upstreamComparison
+    ? remotes.filter((remote) => remote.name !== upstreamComparison.remote)
+    : remotes;
+  const syncRemotes = upstreamComparison
+    ? (trackedRemote ? [trackedRemote] : nonUpstreamRemotes)
+    : remotes;
+  const primarySyncAction: SyncAction =
+    syncAction === 'fetch' || syncAction === 'pull' || syncAction === 'push'
+      ? syncAction
+      : null;
 
   const managementButtons = (
     <div className="flex items-center gap-1 shrink-0">
@@ -291,25 +366,31 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
 
   const syncButtons = (
     <SyncActions
-      syncAction={syncAction}
+      syncAction={primarySyncAction}
       remotes={remotes}
+      fetchPullRemotes={syncRemotes}
       onFetch={onFetch}
       onPull={onPull}
       onPush={onPush}
       onRemoveRemote={onRemoveRemote}
       removingRemoteName={removingRemoteName}
-      disabled={!status}
+      disabled={!status || syncAction !== null}
       iconOnly={true}
       tooltipDelayMs={useTwoRowHeader ? 300 : 1000}
       aheadCount={status.ahead}
       behindCount={status.behind}
+      trackingBranch={upstreamComparison ? status.tracking : null}
     />
   );
 
-  const upstreamStatusPill = status.upstreamComparison ? (
-    <UpstreamStatusPill
-      comparison={status.upstreamComparison}
+  const upstreamSyncRow = upstreamComparison ? (
+    <UpstreamSyncRow
+      comparison={upstreamComparison}
       trackingBranch={status.tracking}
+      syncAction={syncAction}
+      disabled={!status}
+      onFetch={onFetchUpstream}
+      onSync={onSyncUpstream}
       tooltipDelayMs={useTwoRowHeader ? 300 : 1000}
     />
   ) : null;
@@ -357,8 +438,8 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
         <div className="min-w-0 max-w-[45%]">{identityControl}</div>
       </div>
 
-      {upstreamStatusPill ? (
-        <div className="mt-1.5 min-w-0">{upstreamStatusPill}</div>
+      {upstreamSyncRow ? (
+        <div className="mt-1.5 min-w-0">{upstreamSyncRow}</div>
       ) : null}
     </header>
   );

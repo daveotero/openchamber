@@ -2,7 +2,7 @@ import React from 'react';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useFireworksCelebration } from '@/contexts/FireworksContext';
-import type { GitIdentityProfile, CommitFileEntry } from '@/lib/api/types';
+import type { GitIdentityProfile, CommitFileEntry, GitRemoteComparison } from '@/lib/api/types';
 import { useGitIdentitiesStore } from '@/stores/useGitIdentitiesStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
@@ -70,7 +70,8 @@ import { generateCommitMessage as generateSessionCommitMessage, getGitWorktreeBo
 import { sessionEvents } from '@/lib/sessionEvents';
 import { useI18n } from '@/lib/i18n';
 
-type SyncAction = 'fetch' | 'pull' | 'push' | null;
+type PrimarySyncAction = 'fetch' | 'pull' | 'push';
+type SyncAction = PrimarySyncAction | 'upstreamFetch' | 'upstreamSync' | null;
 type CommitAction = 'commit' | 'commitAndPush' | null;
 type BranchOperation = 'merge' | 'rebase' | null;
 type ActionTab = 'commit' | 'branch' | 'pr' | 'worktree';
@@ -906,7 +907,7 @@ export const GitView: React.FC = () => {
     });
   }, [status, changeEntries, hasUserAdjustedSelection]);
 
-  const handleSyncAction = async (action: Exclude<SyncAction, null>, remote?: GitRemote) => {
+  const handleSyncAction = async (action: PrimarySyncAction, remote?: GitRemote) => {
     if (!currentDirectory) return;
     setSyncAction(action);
 
@@ -944,6 +945,46 @@ export const GitView: React.FC = () => {
         err instanceof Error
           ? err.message
           : t('gitView.toast.syncActionFailed', { action: action === 'pull' ? t('gitView.sync.pull') : action });
+      toast.error(message);
+    } finally {
+      setSyncAction(null);
+    }
+  };
+
+  const handleUpstreamFetch = async (comparison: GitRemoteComparison) => {
+    if (!currentDirectory) return;
+    setSyncAction('upstreamFetch');
+
+    try {
+      await git.gitFetch(currentDirectory, { remote: comparison.remote });
+      toast.success(t('gitView.toast.fetchedFromRemote', { name: comparison.remote }));
+      await refreshStatusAndBranches(false);
+      await refreshLog();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('gitView.toast.syncActionFailed', { action: t('gitView.sync.upstreamFetch') });
+      toast.error(message);
+    } finally {
+      setSyncAction(null);
+    }
+  };
+
+  const handleUpstreamSync = async (comparison: GitRemoteComparison) => {
+    if (!currentDirectory) return;
+    setSyncAction('upstreamSync');
+
+    try {
+      const branch = status?.current || comparison.branch;
+      await git.gitFetch(currentDirectory, { remote: comparison.remote });
+      const result = await git.gitPull(currentDirectory, { remote: comparison.remote, branch });
+      toast.success(
+        result.files.length === 1
+          ? t('gitView.toast.pulledFilesSingle', { count: result.files.length, name: comparison.remote })
+          : t('gitView.toast.pulledFilesPlural', { count: result.files.length, name: comparison.remote })
+      );
+      await refreshStatusAndBranches(false);
+      await refreshLog();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('gitView.toast.syncActionFailed', { action: t('gitView.sync.upstreamSync') });
       toast.error(message);
     } finally {
       setSyncAction(null);
@@ -2037,6 +2078,8 @@ export const GitView: React.FC = () => {
         onFetch={(remote) => handleSyncAction('fetch', remote)}
         onPull={(remote) => handleSyncAction('pull', remote)}
         onPush={() => handleSyncAction('push')}
+        onFetchUpstream={handleUpstreamFetch}
+        onSyncUpstream={handleUpstreamSync}
         onRemoveRemote={handleRemoveRemote}
         removingRemoteName={removingRemoteName}
         onCheckoutBranch={handleCheckoutBranch}
