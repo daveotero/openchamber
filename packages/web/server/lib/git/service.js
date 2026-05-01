@@ -1419,8 +1419,10 @@ export async function getStatus(directory, options = {}) {
       }
     }
 
-    if (!lightMode && status.current && (!tracking || !tracking.startsWith('upstream/'))) {
-      upstreamComparison = await getRemoteBranchComparison(git, 'upstream', status.current);
+    if (!lightMode && status.current) {
+      upstreamComparison = tracking?.startsWith('upstream/')
+        ? null
+        : await getRemoteBranchComparison(git, 'upstream', status.current);
     }
 
     // Check for in-progress operations

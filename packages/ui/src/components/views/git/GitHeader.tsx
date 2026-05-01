@@ -391,7 +391,7 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
       comparison={upstreamComparison}
       trackingBranch={status.tracking}
       syncAction={syncAction}
-      disabled={!status}
+      disabled={syncAction !== null}
       onFetch={onFetchUpstream}
       onSync={onSyncUpstream}
       tooltipDelayMs={useTwoRowHeader ? 300 : 1000}
