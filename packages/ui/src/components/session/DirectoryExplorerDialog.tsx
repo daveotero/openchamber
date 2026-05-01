@@ -12,17 +12,22 @@ import { Input } from '@/components/ui/input';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useFileSystemAccess } from '@/hooks/useFileSystemAccess';
+import type { DesktopSettings } from '@/lib/desktop';
+import { updateDesktopSettings } from '@/lib/persistence';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui';
 import {
   RiArrowDownSLine,
   RiArrowLeftSLine,
+  RiArrowRightSLine,
   RiArrowUpSLine,
   RiCheckboxBlankLine,
   RiCheckboxLine,
   RiCornerDownLeftLine,
   RiFolder6Line,
   RiFolderAddLine,
+  RiPushpin2Line,
+  RiPushpinLine,
 } from '@remixicon/react';
 import { useDeviceInfo } from '@/lib/device';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
@@ -105,6 +110,19 @@ const normalizeDirectoryPath = (path: string | null | undefined): string | null 
   return normalized.toLowerCase();
 };
 
+const normalizeStoredDirectoryPath = (path: string | null | undefined): string | null => {
+  if (!path) return null;
+  const normalized = trimTrailingSeparators(normalizeSeparators(path.trim()));
+  return normalized || null;
+};
+
+const getDirectoryName = (path: string): string => {
+  const normalized = normalizeStoredDirectoryPath(path) ?? path;
+  if (normalized === '/') return '/';
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+};
+
 const displayPathToAbsolutePath = (value: string, homeDirectory: string): string => {
   const trimmed = value.trim();
   if (trimmed === '~') return homeDirectory;
@@ -157,7 +175,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   const { isMobile } = useDeviceInfo();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const addButtonRef = React.useRef<HTMLButtonElement>(null);
-  const rowRefs = React.useRef(new Map<string, HTMLButtonElement>());
+  const rowRefs = React.useRef(new Map<string, HTMLDivElement>());
   const [dialogHomeDirectory, setDialogHomeDirectory] = React.useState('');
   const [query, setQuery] = React.useState('~/');
   const [entries, setEntries] = React.useState<BrowseEntry[]>([]);
@@ -167,6 +185,9 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   const [isConfirming, setIsConfirming] = React.useState(false);
   const [isOpeningFinder, setIsOpeningFinder] = React.useState(false);
   const [addButtonWidth, setAddButtonWidth] = React.useState(0);
+  const [pinnedPaths, setPinnedPaths] = React.useState<Set<string>>(new Set());
+  const [isPinnedSectionExpanded, setIsPinnedSectionExpanded] = React.useState(true);
+  const isInitialPinnedSync = React.useRef(true);
 
   const explorerRootDirectory = dialogHomeDirectory || homeDirectory;
 
@@ -175,6 +196,91 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       .map((project) => normalizeDirectoryPath(project.path))
       .filter((path): path is string => Boolean(path))
   ), [projects]);
+
+  const absolutePathToDisplayPath = React.useCallback((path: string): string => {
+    const normalizedPath = normalizeStoredDirectoryPath(path) ?? path;
+    const normalizedRoot = normalizeStoredDirectoryPath(explorerRootDirectory);
+    if (!normalizedRoot) return normalizedPath;
+
+    const normalizedPathKey = normalizeDirectoryPath(normalizedPath);
+    const normalizedRootKey = normalizeDirectoryPath(normalizedRoot);
+    if (!normalizedPathKey || !normalizedRootKey) return normalizedPath;
+    if (normalizedPathKey === normalizedRootKey) return '~';
+    if (normalizedPathKey.startsWith(`${normalizedRootKey}/`)) {
+      return `~/${normalizedPath.slice(normalizedRoot.length + 1)}`;
+    }
+    return normalizedPath;
+  }, [explorerRootDirectory]);
+
+  const pinnedDirectories = React.useMemo(() => (
+    Array.from(pinnedPaths)
+      .map((path) => normalizeStoredDirectoryPath(path))
+      .filter((path): path is string => Boolean(path))
+      .map((path) => ({ name: getDirectoryName(path), path }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+  ), [pinnedPaths]);
+
+  const isPathPinned = React.useCallback((path: string): boolean => {
+    const normalized = normalizeStoredDirectoryPath(path);
+    return Boolean(normalized && pinnedPaths.has(normalized));
+  }, [pinnedPaths]);
+
+  const applyPinnedDirectories = React.useCallback((paths: unknown) => {
+    if (!Array.isArray(paths)) return;
+    const normalized = paths
+      .map((path) => (typeof path === 'string' ? normalizeStoredDirectoryPath(path) : null))
+      .filter((path): path is string => Boolean(path));
+    setPinnedPaths(new Set(normalized));
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    try {
+      const raw = localStorage.getItem('pinnedDirectories');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (!cancelled) applyPinnedDirectories(parsed);
+      }
+    } catch (error) {
+      console.warn('Failed to load pinned directories from local storage:', error);
+    }
+
+    const loadPinnedDirectories = async () => {
+      try {
+        const response = await fetch('/api/config/settings', {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!cancelled) applyPinnedDirectories(data?.pinnedDirectories);
+      } catch (error) {
+        console.warn('Failed to load pinned directories:', error);
+      }
+    };
+
+    const handleSettingsSynced = (event: Event) => {
+      const detail = (event as CustomEvent<DesktopSettings>).detail;
+      applyPinnedDirectories(detail?.pinnedDirectories);
+    };
+
+    window.addEventListener('openchamber:settings-synced', handleSettingsSynced);
+    void loadPinnedDirectories();
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('openchamber:settings-synced', handleSettingsSynced);
+    };
+  }, [applyPinnedDirectories]);
+
+  React.useEffect(() => {
+    if (isInitialPinnedSync.current) {
+      isInitialPinnedSync.current = false;
+      return;
+    }
+    void updateDesktopSettings({ pinnedDirectories: Array.from(pinnedPaths) });
+  }, [pinnedPaths]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -244,6 +350,20 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       cancelled = true;
     };
   }, [browseDirectoryAbsolutePath, open]);
+
+  const togglePin = React.useCallback((path: string) => {
+    const normalizedPath = normalizeStoredDirectoryPath(path);
+    if (!normalizedPath) return;
+    setPinnedPaths((previous) => {
+      const next = new Set(previous);
+      if (next.has(normalizedPath)) {
+        next.delete(normalizedPath);
+      } else {
+        next.add(normalizedPath);
+      }
+      return next;
+    });
+  }, []);
 
   const filteredEntries = React.useMemo(() => {
     const lowerFilter = browseFilterQuery.toLowerCase();
@@ -373,6 +493,10 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     setQuery(ensureBrowseDirectoryPath(displayPath));
   }, []);
 
+  const browseToAbsolutePath = React.useCallback((path: string) => {
+    browseToDisplayPath(absolutePathToDisplayPath(path));
+  }, [absolutePathToDisplayPath, browseToDisplayPath]);
+
   const browseToEntry = React.useCallback((entry: BrowseEntry) => {
     setQuery(appendBrowsePathSegment(query, entry.name));
   }, [query]);
@@ -492,9 +616,91 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     </div>
   );
 
+  const renderPinButton = (path: string) => {
+    const isPinned = isPathPinned(path);
+    return (
+      <button
+        type="button"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.stopPropagation();
+          togglePin(path);
+        }}
+        className={cn(
+          'rounded-lg p-1 text-muted-foreground transition-opacity hover:bg-interactive-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+          isMobile || isPinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        )}
+        title={isPinned ? t('directoryTree.actions.unpinDirectory') : t('directoryTree.actions.pinDirectory')}
+        aria-label={isPinned ? t('directoryTree.actions.unpinDirectory') : t('directoryTree.actions.pinDirectory')}
+      >
+        {isPinned ? <RiPushpin2Line className="h-4 w-4 text-primary" /> : <RiPushpinLine className="h-4 w-4" />}
+      </button>
+    );
+  };
+
+  const renderPinnedDirectory = (entry: BrowseEntry): React.ReactNode => {
+    const normalizedPath = normalizeStoredDirectoryPath(entry.path);
+    if (!normalizedPath) return null;
+
+    const normalized = normalizeDirectoryPath(normalizedPath);
+    const isSelected = Boolean(normalizedTargetPath && normalized === normalizedTargetPath);
+    const isAlreadyProject = Boolean(normalized && addedProjectPaths.has(normalized));
+    const displayPath = absolutePathToDisplayPath(normalizedPath);
+
+    return (
+      <div
+        key={normalizedPath}
+        className={cn(
+          'group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+          isSelected ? 'bg-interactive-selection text-interactive-selection-foreground' : 'hover:bg-interactive-hover/50'
+        )}
+      >
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => browseToAbsolutePath(normalizedPath)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+        >
+          <RiFolder6Line className="h-4 w-4 flex-shrink-0 text-muted-foreground/80" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate typography-ui-label text-foreground">{entry.name}</span>
+            <span className="block truncate typography-micro text-muted-foreground">{displayPath}</span>
+          </span>
+        </button>
+        {isAlreadyProject ? (
+          <span className="rounded-full border border-border/60 px-2 py-0.5 typography-meta text-muted-foreground">
+            {t('directoryExplorerDialog.browse.addedBadge')}
+          </span>
+        ) : null}
+        {renderPinButton(normalizedPath)}
+      </div>
+    );
+  };
+
   const resultsSection = (
     <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-border/60 bg-[var(--surface-elevated)] shadow-sm">
       <div className="max-h-[min(28rem,58vh)] overflow-y-auto p-2">
+        {pinnedDirectories.length > 0 ? (
+          <div className="mb-2">
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setIsPinnedSectionExpanded((previous) => !previous)}
+              className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 pb-1 pt-0.5 text-left typography-meta font-medium uppercase tracking-wide text-muted-foreground/80 transition-colors hover:bg-interactive-hover/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            >
+              {isPinnedSectionExpanded ? <RiArrowDownSLine className="h-3.5 w-3.5" /> : <RiArrowRightSLine className="h-3.5 w-3.5" />}
+              <span>{t('directoryTree.section.pinned')}</span>
+              <span className="ml-auto typography-micro normal-case tracking-normal text-muted-foreground/60">
+                {pinnedDirectories.length}
+              </span>
+            </button>
+            {isPinnedSectionExpanded ? (
+              <div className="space-y-0.5">
+                {pinnedDirectories.map((entry) => renderPinnedDirectory(entry))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="px-2 pb-1 pt-0.5 typography-meta font-medium uppercase tracking-wide text-muted-foreground/80">
           {t('directoryExplorerDialog.browse.directories')}
         </div>
@@ -511,7 +717,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
             {rows.map((row, index) => {
               const isActive = index === highlightedIndex;
               return (
-                <button
+                <div
                   key={row.value}
                   ref={(node) => {
                     if (node) {
@@ -520,32 +726,40 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
                       rowRefs.current.delete(row.value);
                     }
                   }}
-                  type="button"
-                  disabled={row.type === 'directory' && row.disabled}
                   onMouseEnter={() => setHighlightedIndex(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => executeRow(row)}
                   className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+                    'group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
                     isActive && 'bg-interactive-selection text-interactive-selection-foreground',
                     !isActive && 'hover:bg-interactive-hover/50',
-                    row.type === 'directory' && row.disabled && 'cursor-not-allowed opacity-45 hover:bg-transparent'
+                    row.type === 'directory' && row.disabled && 'opacity-70 hover:bg-transparent'
                   )}
                 >
-                  {row.type === 'up' ? (
-                    <RiArrowLeftSLine className="h-4 w-4 flex-shrink-0 text-muted-foreground/80" />
-                  ) : (
-                    <RiFolder6Line className="h-4 w-4 flex-shrink-0 text-muted-foreground/80" />
-                  )}
-                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                    <span className="truncate typography-ui-label text-foreground">{row.name}</span>
-                  </span>
+                  <button
+                    type="button"
+                    disabled={row.type === 'directory' && row.disabled}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => executeRow(row)}
+                    className={cn(
+                      'flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+                      row.type === 'directory' && row.disabled && 'cursor-not-allowed opacity-60'
+                    )}
+                  >
+                    {row.type === 'up' ? (
+                      <RiArrowLeftSLine className="h-4 w-4 flex-shrink-0 text-muted-foreground/80" />
+                    ) : (
+                      <RiFolder6Line className="h-4 w-4 flex-shrink-0 text-muted-foreground/80" />
+                    )}
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <span className="truncate typography-ui-label text-foreground">{row.name}</span>
+                    </span>
+                  </button>
                   {row.type === 'directory' && row.disabled ? (
                     <span className="rounded-full border border-border/60 px-2 py-0.5 typography-meta text-muted-foreground">
                       {t('directoryExplorerDialog.browse.addedBadge')}
                     </span>
                   ) : null}
-                </button>
+                  {row.type === 'directory' ? renderPinButton(row.path) : null}
+                </div>
               );
             })}
           </div>
