@@ -49,8 +49,6 @@ interface GitHeaderProps {
   onPush: () => void;
   onFetchUpstream: (comparison: GitRemoteComparison) => void;
   onSyncUpstream: (comparison: GitRemoteComparison) => void;
-  onRemoveRemote: (remote: GitRemote) => void;
-  removingRemoteName: string | null;
   onCheckoutBranch: (branch: string) => void;
   onCreateBranch: (name: string, remote?: GitRemote) => Promise<void>;
   onRenameBranch?: (oldName: string, newName: string) => Promise<void>;
@@ -308,8 +306,6 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
   onPush,
   onFetchUpstream,
   onSyncUpstream,
-  onRemoveRemote,
-  removingRemoteName,
   onCheckoutBranch,
   onCreateBranch,
   onRenameBranch,
@@ -333,12 +329,15 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
   const trackedRemote = trackedRemoteName
     ? remotes.find((remote) => remote.name === trackedRemoteName)
     : undefined;
+  const originRemote = remotes.find((remote) => remote.name === 'origin');
   const nonUpstreamRemotes = upstreamComparison
     ? remotes.filter((remote) => remote.name !== upstreamComparison.remote)
     : remotes;
-  const syncRemotes = upstreamComparison
-    ? (trackedRemote ? [trackedRemote] : nonUpstreamRemotes)
-    : remotes;
+  const fallbackSyncRemote = upstreamComparison
+    ? (nonUpstreamRemotes.find((remote) => remote.name === 'origin') ?? nonUpstreamRemotes[0])
+    : (originRemote ?? remotes[0]);
+  const syncRemote = trackedRemote ?? fallbackSyncRemote;
+  const syncRemotes = syncRemote ? [syncRemote] : [];
   const primarySyncAction: SyncAction =
     syncAction === 'fetch' || syncAction === 'pull' || syncAction === 'push'
       ? syncAction
@@ -372,8 +371,6 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
       onFetch={onFetch}
       onPull={onPull}
       onPush={onPush}
-      onRemoveRemote={onRemoveRemote}
-      removingRemoteName={removingRemoteName}
       disabled={!status || syncAction !== null}
       iconOnly={true}
       tooltipDelayMs={useTwoRowHeader ? 300 : 1000}

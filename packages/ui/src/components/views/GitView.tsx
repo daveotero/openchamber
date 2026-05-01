@@ -535,7 +535,6 @@ export const GitView: React.FC = () => {
     return isActionTab(stored) ? stored : 'commit';
   });
   const [remotes, setRemotes] = React.useState<GitRemote[]>([]);
-  const [removingRemoteName, setRemovingRemoteName] = React.useState<string | null>(null);
   const [branchOperation, setBranchOperation] = React.useState<BranchOperation>(null);
   const [operationLogs, setOperationLogs] = React.useState<OperationLogEntry[]>([]);
   const [conflictDialogOpen, setConflictDialogOpen] = React.useState(false);
@@ -990,35 +989,6 @@ export const GitView: React.FC = () => {
       setSyncAction(null);
     }
   };
-
-  const handleRemoveRemote = React.useCallback(async (remote: GitRemote) => {
-    if (!currentDirectory) return;
-
-    const remoteName = remote.name.trim();
-    if (!remoteName) {
-      toast.error(t('gitView.toast.remoteNameRequired'));
-      return;
-    }
-    if (remoteName === 'origin') {
-      toast.error(t('gitView.toast.cannotRemoveOriginRemote'));
-      return;
-    }
-
-    setRemovingRemoteName(remoteName);
-    try {
-      await git.removeRemote(currentDirectory, { remote: remoteName });
-      toast.success(t('gitView.toast.removedRemote', { name: remoteName }));
-      await Promise.all([
-        refreshStatusAndBranches(false),
-        refreshRemotes(),
-      ]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to remove ${remoteName}`;
-      toast.error(message);
-    } finally {
-      setRemovingRemoteName(null);
-    }
-  }, [currentDirectory, git, refreshRemotes, refreshStatusAndBranches, t]);
 
   const handleCommit = async (options: { pushAfter?: boolean } = {}) => {
     if (!currentDirectory) return;
@@ -2080,8 +2050,6 @@ export const GitView: React.FC = () => {
         onPush={() => handleSyncAction('push')}
         onFetchUpstream={handleUpstreamFetch}
         onSyncUpstream={handleUpstreamSync}
-        onRemoveRemote={handleRemoveRemote}
-        removingRemoteName={removingRemoteName}
         onCheckoutBranch={handleCheckoutBranch}
         onCreateBranch={handleCreateBranch}
         onRenameBranch={handleRenameBranch}
