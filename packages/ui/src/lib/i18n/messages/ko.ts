@@ -666,7 +666,6 @@ export const dict: Record<I18nKey, string> = {
   'gitView.toast.generateCommitMessageFailed': '커밋 메시지 생성 실패',
   'gitView.toast.mergeAborted': 'merge 중단됨',
   'gitView.toast.mergeCompleted': 'merge 완료됨',
-<<<<<<< HEAD
   'gitView.toast.mergeConflictsDetected': '병합 충돌이 감지되었습니다',
   'gitView.toast.mergedIntoBranch': '{branch}을(를) {currentBranch}에 병합했습니다',
   'gitView.toast.pulledFilesPlural': '{name}에서 파일 {count}개를 풀했습니다',

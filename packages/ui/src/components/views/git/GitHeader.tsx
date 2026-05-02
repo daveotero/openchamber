@@ -29,7 +29,6 @@ import type {
   GitRemote,
   GitRemoteComparison,
 } from '@/lib/api/types';
-import { useUIStore } from '@/stores/useUIStore';
 import { useI18n } from '@/lib/i18n';
 
 type SyncAction = 'fetch' | 'pull' | 'push' | null;
@@ -304,7 +303,7 @@ export const GitHeader: React.FC<GitHeaderProps> = ({
     <UpstreamStatusPill
       comparison={status.upstreamComparison}
       trackingBranch={status.tracking}
-      tooltipDelayMs={useTwoRowHeader ? 300 : 1000}
+      tooltipDelayMs={1000}
     />
   ) : null;
 
