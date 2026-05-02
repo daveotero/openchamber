@@ -1153,6 +1153,13 @@ const readThemeSource = () => {
   return 'system';
 };
 
+const canUseTitleBarOverlay = (browserWindow) => (
+  process.platform === 'win32' &&
+  Boolean(browserWindow?.__ocTitleBarOverlayEnabled) &&
+  typeof browserWindow.setTitleBarOverlay === 'function' &&
+  !browserWindow.isDestroyed()
+);
+
 const createBrowserWindow = ({ label, restoreGeometry, url }) => {
   const saved = restoreGeometry ? readWindowState() : null;
   const useSaved = saved && typeof saved.width === 'number' && typeof saved.height === 'number';
@@ -1161,6 +1168,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url }) => {
   const desktopHome = os.homedir() || '';
   const desktopMacosMajor = String(macosMajorVersion());
   const usesCustomTitleBar = process.platform === 'darwin';
+  const titleBarOverlayEnabled = false;
   const autoHidesNativeMenuBar = process.platform !== 'darwin';
   const options = {
     title: 'OpenChamber',
@@ -1178,6 +1186,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url }) => {
     // Electron's hiddenInset adds its own extra inset, which leaves the controls
     // visibly lower than the app header. Use a plain hidden title bar instead.
     titleBarStyle: usesCustomTitleBar ? 'hidden' : 'default',
+    titleBarOverlay: titleBarOverlayEnabled,
     trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 17 } : undefined,
     webPreferences: {
       additionalArguments: [
@@ -1200,6 +1209,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url }) => {
 
   const browserWindow = new BrowserWindow(options);
   browserWindow.__ocLabel = label || nextWindowLabel();
+  browserWindow.__ocTitleBarOverlayEnabled = titleBarOverlayEnabled;
 
   if (useSaved && saved.maximized) {
     browserWindow.maximize();
@@ -1388,12 +1398,16 @@ const createAdditionalWindow = async (url) => {
 };
 
 const resolveInitialUrl = async () => {
-  const localUrl = isDev && await waitForHealth('http://127.0.0.1:3901', 5_000, 100)
-    ? 'http://127.0.0.1:3901'
+  const hmrApiPort = process.env.OPENCHAMBER_HMR_API_PORT || '3901';
+  const hmrUiPort = process.env.OPENCHAMBER_HMR_UI_PORT || '5173';
+  const hmrApiUrl = `http://127.0.0.1:${hmrApiPort}`;
+  const hmrUiUrl = `http://127.0.0.1:${hmrUiPort}`;
+  const localUrl = isDev && await waitForHealth(hmrApiUrl, 5_000, 100)
+    ? hmrApiUrl
     : await spawnLocalServer();
 
-  const localUiUrl = isDev && await waitForHealth('http://127.0.0.1:5173', 8_000, 100)
-    ? 'http://127.0.0.1:5173'
+  const localUiUrl = isDev && await waitForHealth(hmrUiUrl, 8_000, 100)
+    ? hmrUiUrl
     : localUrl;
 
   state.sidecarUrl = localUrl;
@@ -2163,7 +2177,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       } else {
         nativeTheme.themeSource = 'system';
       }
-      if (process.platform === 'win32' && browserWindow && !browserWindow.isDestroyed()) {
+      if (canUseTitleBarOverlay(browserWindow)) {
         const useDark = nativeTheme.shouldUseDarkColors;
         browserWindow.setTitleBarOverlay({
           color: useDark ? '#151313' : '#f5f5f4',
