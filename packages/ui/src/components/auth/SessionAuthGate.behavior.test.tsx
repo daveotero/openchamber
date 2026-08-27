@@ -12,6 +12,25 @@ type HookCallback = (...args: unknown[]) => unknown;
 type JSXProps = Record<string, unknown> & { children?: unknown };
 type JSXElementType<P extends Record<string, unknown> = Record<string, unknown>> = ComponentFn<P> | string | symbol;
 
+type DesktopMockInvokeArgs = {
+  url?: string;
+  password?: string;
+  trustDevice?: boolean;
+  requestHeaders?: Record<string, string>;
+  title?: string;
+  cancelLabel?: string;
+  theme?: {
+    '--surface-background'?: string;
+    '--surface-foreground'?: string;
+    '--surface-muted-foreground'?: string;
+    '--surface-elevated'?: string;
+    '--interactive-border'?: string;
+    '--interactive-hover'?: string;
+    '--interactive-focus-ring'?: string;
+    '--primary-base'?: string;
+  };
+};
+
 const hookRecords = new Map<unknown, HookRecord>();
 let currentRecord: HookRecord | null = null;
 let hookIndex = 0;
@@ -34,6 +53,7 @@ const resetHarness = () => {
   runtimeApiBaseUrl = '';
   runtimeKey = 'local';
   runtimeEndpointChangedListener = null;
+  desktopPasskeySupported = false;
   desktopInvoke = async () => null;
   desktopHostsGetCalls = 0;
   desktopHostsSetCalls = 0;
@@ -46,6 +66,8 @@ const resetHarness = () => {
         getItem: () => null,
         setItem: () => undefined,
       },
+      document: { documentElement: {} },
+      getComputedStyle: () => ({ getPropertyValue: () => '' }),
       setTimeout: (callback: () => void) => {
         queueMicrotask(callback);
         return 0;
@@ -183,7 +205,8 @@ let runtimeFetchRejects = true;
 let runtimeApiBaseUrl = '';
 let runtimeKey = 'local';
 let runtimeEndpointChangedListener: (() => void) | null = null;
-let desktopInvoke: () => Promise<unknown> = async () => null;
+let desktopPasskeySupported = false;
+let desktopInvoke: (command?: string, args?: DesktopMockInvokeArgs) => Promise<unknown> = async () => null;
 let desktopHostsGetCalls = 0;
 let desktopHostsSetCalls = 0;
 let runtimeSwitchCalls = 0;
@@ -202,7 +225,7 @@ mock.module('@simplewebauthn/browser', () => ({
 }));
 
 mock.module('@/components/ui/button', () => ({
-  Button: ({ children }: { children?: unknown }) => children ?? null,
+  Button: (props: JSXProps) => ({ type: 'button', props }),
 }));
 
 mock.module('@/components/ui/checkbox', () => ({
@@ -238,9 +261,15 @@ mock.module('@/lib/i18n', () => ({
 }));
 
 mock.module('@/lib/desktop', () => ({
-  invokeDesktop: () => desktopInvoke(),
+  cancelDesktopPasskeyAuthentication: () => {
+    if (desktopPasskeySupported) void desktopInvoke('desktop_cancel_passkey_authentication');
+  },
+  getDesktopPasskeyStatus: (url: string, requestHeaders: Record<string, string>) => desktopInvoke('desktop_passkey_status', { url, requestHeaders }),
+  invokeDesktop: (command: string, args?: DesktopMockInvokeArgs) => desktopInvoke(command, args),
   isDesktopShell: mock(() => desktopShell),
   isVSCodeRuntime: mock(() => false),
+  requestDesktopPasskeyAuthentication: (args: DesktopMockInvokeArgs) => desktopInvoke('desktop_authenticate_with_passkey', args),
+  supportsDesktopPasskeyAuthentication: () => desktopPasskeySupported,
 }));
 
 mock.module('@/lib/persistence', () => ({
@@ -267,6 +296,20 @@ mock.module('@/lib/runtime-fetch', () => ({
 
 mock.module('@/lib/runtime-auth', () => ({
   getRuntimeExtraHeadersSync: mock(() => ({})),
+}));
+
+const authSessionStoreState = {
+  state: 'ok',
+  markAuthenticated: () => undefined,
+};
+const useAuthSessionStoreMock = Object.assign(
+  (selector: (state: typeof authSessionStoreState) => unknown) => selector(authSessionStoreState),
+  { getState: () => authSessionStoreState },
+);
+
+mock.module('@/lib/runtime-auth-expiry', () => ({
+  installAuthSessionFocusWatch: mock(() => undefined),
+  useAuthSessionStore: useAuthSessionStoreMock,
 }));
 
 mock.module('@/lib/runtime-switch', () => ({
@@ -353,6 +396,23 @@ const findElement = (node: unknown, type: string): { type: string; props: JSXPro
   return findElement(children, type);
 };
 
+const findElementByText = (node: unknown, type: string, text: string): { type: string; props: JSXProps } | null => {
+  if (!node || typeof node !== 'object') return null;
+  const element = node as { type?: unknown; props?: JSXProps };
+  if (element.type === type && element.props && collectText(element).includes(text)) {
+    return { type, props: element.props };
+  }
+  const children = element.props?.children;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const match = findElementByText(child, type, text);
+      if (match) return match;
+    }
+    return null;
+  }
+  return findElementByText(children, type, text);
+};
+
 describe('SessionAuthGate status-check failure behavior', () => {
   test('keeps non-desktop status-check rejection on the error screen', async () => {
     resetHarness();
@@ -404,6 +464,46 @@ describe('SessionAuthGate status-check failure behavior', () => {
     runtimeKey = 'host:b';
     runtimeEndpointChangedListener?.();
     resolveLogin({ token: 'token-a' });
+    await pending;
+
+    expect(desktopHostsGetCalls).toBe(0);
+    expect(desktopHostsSetCalls).toBe(0);
+    expect(runtimeSwitchCalls).toBe(0);
+  });
+
+  test('discards a desktop passkey completion after switching to another host', async () => {
+    resetHarness();
+    desktopShell = true;
+    desktopPasskeySupported = true;
+    runtimeFetchRejects = false;
+    runtimeApiBaseUrl = 'https://host-a.example';
+    runtimeKey = 'host:a';
+    type DesktopAuthenticationResult = { supported: boolean; ok: boolean; token: string };
+    let resolveAuthentication: (value: DesktopAuthenticationResult) => void = () => {
+      throw new Error('Passkey authentication did not start');
+    };
+    desktopInvoke = (command) => {
+      if (command === 'desktop_passkey_status') {
+        return Promise.resolve({ enabled: true, hasPasskeys: true, passkeyCount: 1, rpID: 'host-a.example' });
+      }
+      if (command === 'desktop_authenticate_with_passkey') {
+        return new Promise((resolve) => { resolveAuthentication = resolve; });
+      }
+      return Promise.resolve(null);
+    };
+
+    const lockedTree = await renderGate();
+    const passkeyButton = findElementByText(lockedTree, 'button', 'sessionAuth.actions.usePasskey');
+    expect(passkeyButton).not.toBeNull();
+    if (!passkeyButton) throw new Error('Passkey button was not rendered');
+    // SAFETY: The test harness records the click handler supplied by SessionAuthGate on this button.
+    const pending = (passkeyButton.props.onClick as () => Promise<void>)();
+    await Promise.resolve();
+
+    runtimeApiBaseUrl = 'https://host-b.example';
+    runtimeKey = 'host:b';
+    runtimeEndpointChangedListener?.();
+    resolveAuthentication({ supported: true, ok: true, token: 'token-a' });
     await pending;
 
     expect(desktopHostsGetCalls).toBe(0);

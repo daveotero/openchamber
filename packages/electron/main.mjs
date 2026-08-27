@@ -33,6 +33,11 @@ import {
 } from './linux-autostart.mjs';
 import { unsupportedAppSpecificOpenError, validateLocalPath } from './path-open-utils.mjs';
 import { shouldAllowBrowserPanelCertificateError } from './browser-panel-security.mjs';
+import {
+  authenticateWithDesktopPasskey,
+  cancelDesktopPasskeyAuthentication,
+  fetchDesktopPasskeyStatus,
+} from './desktop-passkey-auth.mjs';
 import { mintOutsideFileGrant } from '@openchamber/web/server/lib/fs/routes.js';
 
 const execFileAsync = promisify(execFile);
@@ -4392,6 +4397,42 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         trustDevice: args.trustDevice === true,
         requestHeaders: args.requestHeaders || {},
       });
+
+    case 'desktop_passkey_status': {
+      if (process.platform !== 'win32') return null;
+      const targetUrl = normalizeHostUrl(String(args.url || ''));
+      if (!targetUrl) return null;
+      return fetchDesktopPasskeyStatus({
+        url: targetUrl,
+        localRuntime: isLocalRuntimeUrl(targetUrl),
+        requestHeaders: args.requestHeaders || {},
+        fetchImpl: (url, init) => electronNet.fetch(url, init),
+      }).catch(() => null);
+    }
+
+    case 'desktop_authenticate_with_passkey': {
+      const targetUrl = normalizeHostUrl(String(args.url || ''));
+      if (!targetUrl) return { supported: process.platform === 'win32', ok: false, error: 'Invalid URL' };
+      const localRuntime = isLocalRuntimeUrl(targetUrl);
+      const clientIdentity = localRuntime
+        ? { clientKind: LOCAL_DESKTOP_CLIENT_KIND, dedupeKey: LOCAL_DESKTOP_CLIENT_DEDUPE_KEY, ...desktopDeviceMetadata() }
+        : { clientKind: REMOTE_DESKTOP_CLIENT_KIND, dedupeKey: `desktop:${await getOrCreateDesktopInstallId()}`, ...desktopDeviceMetadata() };
+      return authenticateWithDesktopPasskey({
+        BrowserWindow,
+        session,
+        parent: browserWindow,
+        platform: process.platform,
+        url: targetUrl,
+        localRuntime,
+        trustDevice: args.trustDevice === true,
+        requestHeaders: args.requestHeaders || {},
+        clientIdentity,
+        ui: args.ui || {},
+      });
+    }
+
+    case 'desktop_cancel_passkey_authentication':
+      return cancelDesktopPasskeyAuthentication();
 
     case 'desktop_set_window_theme': {
       const mode = typeof args.themeMode === 'string' ? args.themeMode : '';

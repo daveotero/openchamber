@@ -321,6 +321,92 @@ export const invokeDesktop = async <T = unknown>(command: string, args?: Record<
   return bridge.invoke(command, args ?? {}) as Promise<T>;
 };
 
+export type DesktopPasskeyTheme = {
+  '--surface-background'?: string;
+  '--surface-foreground'?: string;
+  '--surface-muted-foreground'?: string;
+  '--surface-elevated'?: string;
+  '--interactive-border'?: string;
+  '--interactive-hover'?: string;
+  '--interactive-focus-ring'?: string;
+  '--primary-base'?: string;
+};
+
+type DesktopPasskeyStatus = {
+  enabled: boolean;
+  hasPasskeys: boolean;
+  passkeyCount: number;
+  rpID: string | null;
+};
+
+type DesktopPasskeyAuthenticationResult = {
+  supported: boolean;
+  ok?: boolean;
+  token?: string;
+  cancelled?: boolean;
+  error?: string;
+};
+
+const desktopPasskeyStatusSchema = z.object({
+  enabled: z.boolean(),
+  hasPasskeys: z.boolean(),
+  passkeyCount: z.number(),
+  rpID: z.string().nullable(),
+});
+
+const desktopPasskeyAuthenticationResultSchema = z.object({
+  supported: z.boolean(),
+  ok: z.boolean().optional(),
+  token: z.string().optional(),
+  cancelled: z.boolean().optional(),
+  error: z.string().optional(),
+});
+
+export const supportsDesktopPasskeyAuthentication = (): boolean => (
+  isDesktopShell() && getElectronPlatform() === 'win32'
+);
+
+export const getDesktopPasskeyStatus = async (
+  url: string,
+  requestHeaders: Record<string, string>,
+): Promise<DesktopPasskeyStatus | null> => {
+  if (!supportsDesktopPasskeyAuthentication()) return null;
+  const result = await invokeDesktop('desktop_passkey_status', { url, requestHeaders });
+  const parsed = desktopPasskeyStatusSchema.safeParse(result);
+  return parsed.success ? parsed.data : null;
+};
+
+export const requestDesktopPasskeyAuthentication = async ({
+  url,
+  trustDevice,
+  requestHeaders,
+  title,
+  cancelLabel,
+  theme,
+}: {
+  url: string;
+  trustDevice: boolean;
+  requestHeaders: Record<string, string>;
+  title: string;
+  cancelLabel: string;
+  theme: DesktopPasskeyTheme;
+}): Promise<DesktopPasskeyAuthenticationResult | null> => {
+  if (!supportsDesktopPasskeyAuthentication()) return null;
+  const result = await invokeDesktop('desktop_authenticate_with_passkey', {
+    url,
+    trustDevice,
+    requestHeaders,
+    ui: { title, cancelLabel, theme },
+  });
+  const parsed = desktopPasskeyAuthenticationResultSchema.safeParse(result);
+  return parsed.success ? parsed.data : null;
+};
+
+export const cancelDesktopPasskeyAuthentication = () => {
+  if (!supportsDesktopPasskeyAuthentication()) return;
+  void invokeDesktop('desktop_cancel_passkey_authentication').catch(() => undefined);
+};
+
 type LaunchAtLoginStatus = {
   supported: boolean;
   enabled: boolean;

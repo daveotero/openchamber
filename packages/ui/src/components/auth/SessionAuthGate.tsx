@@ -4,7 +4,16 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui';
-import { invokeDesktop, isDesktopShell, isVSCodeRuntime } from '@/lib/desktop';
+import {
+  cancelDesktopPasskeyAuthentication,
+  getDesktopPasskeyStatus,
+  invokeDesktop,
+  isDesktopShell,
+  isVSCodeRuntime,
+  requestDesktopPasskeyAuthentication,
+  supportsDesktopPasskeyAuthentication,
+  type DesktopPasskeyTheme,
+} from '@/lib/desktop';
 import { syncDesktopSettings, initializeAppearancePreferences } from '@/lib/persistence';
 import { applyPersistedDirectoryPreferences } from '@/lib/directoryPersistence';
 import { DesktopHostSwitcherInline } from '@/components/desktop/DesktopHostSwitcher';
@@ -166,6 +175,27 @@ const captureRuntimeIdentity = (): RuntimeIdentity => ({
   apiBaseUrl: getRuntimeApiBaseUrl(),
   runtimeKey: getRuntimeKey(),
 });
+
+const getDesktopPasskeyTargetUrl = (): string => {
+  const apiBaseUrl = getRuntimeApiBaseUrl();
+  if (apiBaseUrl) return apiBaseUrl;
+  return getRuntimeKey() === 'local' ? readLocalOrigin() : '';
+};
+
+const readDesktopPasskeyTheme = (): DesktopPasskeyTheme => {
+  const styles = window.getComputedStyle(window.document.documentElement);
+  const read = (name: keyof DesktopPasskeyTheme): string => styles.getPropertyValue(name).trim();
+  return {
+    '--surface-background': read('--surface-background'),
+    '--surface-foreground': read('--surface-foreground'),
+    '--surface-muted-foreground': read('--surface-muted-foreground'),
+    '--surface-elevated': read('--surface-elevated'),
+    '--interactive-border': read('--interactive-border'),
+    '--interactive-hover': read('--interactive-hover'),
+    '--interactive-focus-ring': read('--interactive-focus-ring'),
+    '--primary-base': read('--primary-base'),
+  };
+};
 
 const isRuntimeIdentityActive = (identity: RuntimeIdentity): boolean => {
   return runtimeIdentityMatches(identity, captureRuntimeIdentity());
@@ -338,6 +368,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
 }) => {
   const { t } = useI18n();
   const vscodeRuntime = React.useMemo(() => isVSCodeRuntime(), []);
+  const desktopPasskeySupported = React.useMemo(() => supportsDesktopPasskeyAuthentication(), []);
   const skipAuth = vscodeRuntime;
   const showHostSwitcher = React.useMemo(() => isDesktopShell() && !vscodeRuntime, [vscodeRuntime]);
   const [state, setState] = React.useState<GateState>(() => (skipAuth ? 'authenticated' : 'pending'));
@@ -347,7 +378,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
   const [retryAfter, setRetryAfter] = React.useState<number | undefined>(undefined);
   const [isTunnelLocked, setIsTunnelLocked] = React.useState(false);
   const [passkeyStatus, setPasskeyStatus] = React.useState<PasskeyStatus>(defaultPasskeyStatus);
-  const [supportsPasskeys, setSupportsPasskeys] = React.useState(false);
+  const [supportsPasskeys, setSupportsPasskeys] = React.useState(desktopPasskeySupported);
   const [isPasskeyBusy, setIsPasskeyBusy] = React.useState(false);
   const [trustDevice, setTrustDevice] = React.useState<boolean>(() => readStoredTrustDevice());
   const [activePasskeyAction, setActivePasskeyAction] = React.useState<'auth' | 'register' | null>(null);
@@ -368,6 +399,18 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
     }
 
     try {
+      if (desktopPasskeySupported) {
+        const desktopStatus = await getDesktopPasskeyStatus(
+          getDesktopPasskeyTargetUrl(),
+          getRuntimeExtraHeadersSync(),
+        );
+        if (desktopStatus) {
+          if (isRuntimeIdentityActive(runtime)) {
+            setPasskeyStatus(desktopStatus);
+          }
+          return desktopStatus;
+        }
+      }
       const nextStatus = await fetchPasskeyStatus();
       if (isRuntimeIdentityActive(runtime)) {
         setPasskeyStatus(nextStatus);
@@ -379,12 +422,17 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
       }
       return defaultPasskeyStatus;
     }
-  }, [skipAuth]);
+  }, [desktopPasskeySupported, skipAuth]);
 
   React.useEffect(() => {
     let cancelled = false;
 
     if (skipAuth) {
+      return;
+    }
+
+    if (desktopPasskeySupported) {
+      setSupportsPasskeys(true);
       return;
     }
 
@@ -409,7 +457,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [skipAuth]);
+  }, [desktopPasskeySupported, skipAuth]);
 
   // Bounded retry scheduling for transient session-check failures. Lives in refs
   // so retries survive re-renders; the timer is cleared on unmount, endpoint
@@ -541,6 +589,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
 
     return subscribeRuntimeEndpointChanged(() => {
       cancelPasskeyCeremony();
+      cancelDesktopPasskeyAuthentication();
       setPassword('');
       setErrorMessage('');
       setRetryAfter(undefined);
@@ -633,6 +682,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
 
   const cancelActivePasskey = React.useCallback(() => {
     cancelPasskeyCeremony();
+    cancelDesktopPasskeyAuthentication();
     setActivePasskeyAction(null);
     setIsPasskeyBusy(false);
   }, []);
@@ -795,14 +845,31 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
     const requestHeaders = getRuntimeExtraHeadersSync();
 
     try {
-      const payload = await authenticateWithPasskey(trustDevice, {
-        issueClientToken: shouldIssueDesktopClientToken(),
-        clientLabel: 'OpenChamber Desktop',
-        ...desktopClientAuthMetadata(),
-      }) as { clientToken?: unknown } | null;
-      const clientToken = shouldIssueDesktopClientToken() && typeof payload?.clientToken === 'string' && payload.clientToken.trim()
-        ? payload.clientToken.trim()
-        : '';
+      let clientToken = '';
+      if (desktopPasskeySupported) {
+        const result = await requestDesktopPasskeyAuthentication({
+          url: getDesktopPasskeyTargetUrl(),
+          trustDevice,
+          requestHeaders,
+          title: t('sessionAuth.actions.usePasskey'),
+          cancelLabel: t('sessionAuth.actions.cancelPasskey'),
+          theme: readDesktopPasskeyTheme(),
+        });
+        if (result?.cancelled) return;
+        if (!result?.ok || !result.token?.trim()) {
+          throw new Error(result?.error || t('sessionAuth.error.passkeySignInCanceled'));
+        }
+        clientToken = result.token.trim();
+      } else {
+        const payload = await authenticateWithPasskey(trustDevice, {
+          issueClientToken: shouldIssueDesktopClientToken(),
+          clientLabel: 'OpenChamber Desktop',
+          ...desktopClientAuthMetadata(),
+        }) as { clientToken?: unknown } | null;
+        clientToken = shouldIssueDesktopClientToken() && typeof payload?.clientToken === 'string' && payload.clientToken.trim()
+          ? payload.clientToken.trim()
+          : '';
+      }
       if (!isRuntimeIdentityActive(runtime)) return;
       if (clientToken) {
         if (!await applyDesktopClientToken(clientToken, runtime, requestHeaders)) return;
@@ -824,7 +891,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
         setIsPasskeyBusy(false);
       }
     }
-  }, [cancelActivePasskey, isPasskeyBusy, isSubmitting, supportsPasskeys, t, trustDevice]);
+  }, [cancelActivePasskey, desktopPasskeySupported, isPasskeyBusy, isSubmitting, supportsPasskeys, t, trustDevice]);
 
   const handlePasskeySetupOnly = React.useCallback(async () => {
     if (isSubmitting || isTunnelLocked || !supportsPasskeys) {

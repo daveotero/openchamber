@@ -19,6 +19,7 @@ The preload bridge exposes desktop-only APIs to the web UI through `window.__OPE
 | File | Purpose |
 |------|---------|
 | `main.mjs` | Electron main process, app lifecycle, windows, menus, deep links, native IPC handlers, updates, local server startup |
+| `desktop-passkey-auth.mjs` | Isolated Windows passkey window, valid-origin selection, ceremony lifecycle, and temporary-session cleanup |
 | `startup-url-selection.mjs` | Pure bundled/HMR startup probe and loopback connection-limit policy |
 | `preload.mjs` | Safe bridge from the rendered UI to Electron IPC |
 | `ssh-manager.mjs` | SSH host import, connection lifecycle, tunnel/port forwarding helpers |
@@ -150,6 +151,7 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 - One-click open/reveal/open-in-app actions.
 - Desktop host switcher and deep-link imports.
 - Local and remote instance handling.
+- Windows passkey sign-in runs in a temporary, sandboxed window at the selected server's WebAuthn origin. Embedded local HTTP uses `localhost`; non-local HTTP is rejected, TLS validation remains enabled, and only the resulting Desktop client token crosses back to the packaged UI.
 - SSH host import, connections, logs, and port forwarding.
 - SSH uses OpenSSH ControlMaster on macOS/Linux. Windows uses independent hidden OpenSSH processes for setup commands and each long-lived forward because Win32 OpenSSH does not support ControlMaster reliably.
 - Tunnel lifecycle integration through the web server runtime.
