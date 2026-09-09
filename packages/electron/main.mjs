@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net as electronNet, Notification, powerMonitor, powerSaveBlocker, protocol, screen, session, shell, webContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeTheme, net as electronNet, Notification, powerMonitor, powerSaveBlocker, protocol, screen, session, shell, webContents } from 'electron';
 import contextMenu from 'electron-context-menu';
 import log from 'electron-log/main.js';
 import dgram from 'node:dgram';
@@ -38,7 +38,11 @@ import {
   cancelDesktopPasskeyAuthentication,
   fetchDesktopPasskeyStatus,
 } from './desktop-passkey-auth.mjs';
+import { createRelayDevTunnelBridge } from './relay-dev-tunnel.mjs';
+import { attachRendererRecovery } from './renderer-recovery.mjs';
 import { mintOutsideFileGrant } from '@openchamber/web/server/lib/fs/routes.js';
+import { fetchUpdateNotes } from '@openchamber/web/server/lib/changelog/update-notes.js';
+import { applyConnectAttemptTimeout } from '@openchamber/web/server/lib/network-defaults.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -106,6 +110,11 @@ if (shouldIgnoreLoopbackConnectionLimit({
 })) {
   app.commandLine.appendSwitch('ignore-connections-limit', '127.0.0.1,localhost');
 }
+// This process runs quota/provider fetches under Node/undici, whose happy-eyeballs
+// default aborts each connect attempt after 250ms — distant provider endpoints
+// routinely need longer handshakes, surfacing as "fetch failed" (#3399). No-op on
+// runtimes without the setter.
+applyConnectAttemptTimeout();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -237,12 +246,14 @@ const LOCAL_DESKTOP_CLIENT_DEDUPE_KEY = 'desktop-local';
 // connecting to someone else's server).
 const REMOTE_DESKTOP_CLIENT_KIND = 'desktop';
 const ENV_OVERRIDE_HOST_ID = '__env';
-const CHANGELOG_URL = 'https://raw.githubusercontent.com/openchamber/openchamber/main/CHANGELOG.md';
 const GITHUB_BUG_REPORT_URL = 'https://github.com/openchamber/openchamber/issues/new?template=bug_report.yml';
 const GITHUB_FEATURE_REQUEST_URL = 'https://github.com/openchamber/openchamber/issues/new?template=feature_request.yml';
 const DISCORD_INVITE_URL = 'https://discord.gg/ZYRSdnwwKA';
 const INSTALLED_APPS_CACHE_TTL_SECS = 60 * 60 * 24;
 const INSTALLED_APPS_CACHE_FILE = 'discovered-apps.json';
+// Bump when discovery results change shape or matching semantics change, so cached
+// entries written by an older build are treated as stale and refresh immediately.
+const INSTALLED_APPS_CACHE_VERSION = 2;
 const LINUX_DESKTOP_ENTRIES_CACHE_TTL_MS = 30_000;
 const OPENCODE_SHUTDOWN_GRACE_MS = 100;
 const { autoUpdater } = updaterPkg;
@@ -580,6 +591,30 @@ const writeJsonFile = async (filePath, data) => {
 const readSettingsRoot = () => {
   const root = readJsonFile(settingsFilePath());
   return root && typeof root === 'object' && !Array.isArray(root) ? root : {};
+};
+
+// The user's profile (theme mode among it) lives in preferences.json beside
+// settings.json since the settings split; each entry is { value, updatedAt }.
+// Installs that predate the split still carry those keys in settings.json, so
+// readers merge both, preferences winning.
+const readPreferencesValues = () => {
+  const root = readJsonFile(path.join(path.dirname(settingsFilePath()), 'preferences.json'));
+  const fields = root && typeof root === 'object' && root.version === 1 && root.fields && typeof root.fields === 'object'
+    ? root.fields
+    : {};
+  // Per-surface keys (theme mode among them) are resolved for the desktop
+  // shell: its own value first, the base value otherwise.
+  const values = {};
+  for (const [key, entry] of Object.entries(fields)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const own = entry.surfaces && typeof entry.surfaces === 'object' ? entry.surfaces.desktop : undefined;
+    if (own && typeof own === 'object' && 'value' in own) {
+      values[key] = own.value;
+    } else if ('value' in entry) {
+      values[key] = entry.value;
+    }
+  }
+  return values;
 };
 
 // Serializes read-modify-write of the settings file within this process.
@@ -1591,6 +1626,16 @@ const spawnLocalServer = async () => {
       apiBaseUrl: state.apiBaseUrl || '',
       requestHeaders: sanitizeRuntimeRequestHeaders(state.requestHeaders || {}),
     }),
+    desktopUpdater: {
+      check: () => handleInvoke(null, 'desktop_check_for_updates'),
+      install: async () => {
+        const updateInfo = await handleInvoke(null, 'desktop_check_for_updates');
+        if (!updateInfo.available) return updateInfo;
+        await handleInvoke(null, 'desktop_download_and_install_update');
+        return updateInfo;
+      },
+      restart: () => handleInvoke(null, 'desktop_restart'),
+    },
   });
 
   const port = handle.getPort();
@@ -1787,12 +1832,24 @@ const computeBootOutcome = ({ envTargetUrl, probe, config, localAvailable }) => 
   return { target: 'remote', status, hostId: host.id, url: host.apiUrl || host.url, ...availability };
 };
 
+const readSplashColor = (settings, key, fallback) => {
+  // The renderer hands the colours over IPC (desktop_set_window_theme) and
+  // main stores them under `desktopSplashColors`; the flat `splash*` keys are
+  // what builds before the settings split wrote and are read as a fallback.
+  const owned = settings.desktopSplashColors && typeof settings.desktopSplashColors === 'object'
+    ? settings.desktopSplashColors[key]
+    : undefined;
+  const legacy = settings[`splash${key.charAt(0).toUpperCase()}${key.slice(1)}`];
+  const value = typeof owned === 'string' ? owned : legacy;
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+};
+
 const buildStartupSplashHtml = () => {
   const settings = readSettingsRoot();
-  const splashBgLight = typeof settings.splashBgLight === 'string' ? settings.splashBgLight.trim() : '#f5f5f4';
-  const splashFgLight = typeof settings.splashFgLight === 'string' ? settings.splashFgLight.trim() : '#1c1917';
-  const splashBgDark = typeof settings.splashBgDark === 'string' ? settings.splashBgDark.trim() : '#0c0a09';
-  const splashFgDark = typeof settings.splashFgDark === 'string' ? settings.splashFgDark.trim() : '#fafaf9';
+  const splashBgLight = readSplashColor(settings, 'bgLight', '#f5f5f4');
+  const splashFgLight = readSplashColor(settings, 'fgLight', '#1c1917');
+  const splashBgDark = readSplashColor(settings, 'bgDark', '#0c0a09');
+  const splashFgDark = readSplashColor(settings, 'fgDark', '#fafaf9');
 
   return `<!doctype html>
   <html>
@@ -2411,7 +2468,7 @@ const nextWindowLabel = () => {
 };
 
 const readThemeSource = () => {
-  const settings = readSettingsRoot();
+  const settings = { ...readSettingsRoot(), ...readPreferencesValues() };
   // themeMode is the user's intent; themeVariant is only the resolved
   // concrete appearance at persist time. When mode === 'system', we must
   // follow the OS even if variant was saved as a specific value.
@@ -2486,6 +2543,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
         `--openchamber-tray-enabled=${trayEnabled ? '1' : '0'}`,
         `--openchamber-boot-outcome=${JSON.stringify(state.bootOutcome || null)}`,
         `--openchamber-relay-host-id=${rendererRuntimeConfig.relayHostId || ''}`,
+        `--openchamber-hmr-origin=${isDev ? `http://127.0.0.1:${process.env.OPENCHAMBER_HMR_UI_PORT || '5173'}` : ''}`,
       ],
       preload: isDev ? path.join(__dirname, 'preload.mjs') : path.join(app.getAppPath(), 'preload.mjs'),
       backgroundThrottling: false,
@@ -2661,6 +2719,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
   browserWindow.webContents.on('zoom-changed', () => {
     browserWindow.webContents.setZoomFactor(1);
   });
+  attachRendererRecovery(browserWindow, { log, label: 'window' });
 
   browserWindow.webContents.on('dom-ready', () => {
     if (browserWindow.__ocLabel === 'main') {
@@ -2897,6 +2956,8 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
   browserWindow.__ocMiniChat = true;
   browserWindow.__ocMiniChatSessionId = sessionWindowKey;
   browserWindow.__ocPinned = false;
+
+  attachRendererRecovery(browserWindow, { log, label: 'mini chat' });
 
   if (sessionWindowKey) {
     state.miniChatWindowsBySession.set(sessionWindowKey, browserWindow);
@@ -3150,24 +3211,60 @@ const setupAutoUpdater = () => {
   });
 };
 
-const parseRelevantChangelogNotes = async (fromVersion, toVersion) => {
-  try {
-    const response = await fetch(CHANGELOG_URL, { signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) return null;
-    const changelog = await response.text();
-    const sections = changelog.split(/^##\s+\[/m).slice(1);
-    const relevant = [];
-    for (const section of sections) {
-      const version = section.split(']')[0];
-      if (compareSemver(version, fromVersion) > 0 && compareSemver(version, toVersion) <= 0) {
-        relevant.push(`## [${section}`.trim());
-      }
+// quitAndInstall() reports failures (rejected code signature, a Squirrel
+// session already disabled by an earlier failure) asynchronously on the
+// 'error' event, long after the call returns. Give the install that long to
+// either take the app down or report why it did not.
+const UPDATE_INSTALL_GRACE_MS = 15_000;
+
+/**
+ * Hand the downloaded update to the platform installer and keep the IPC call
+ * open until the app quits or the updater reports a failure, so a rejected
+ * install reaches the renderer instead of dying in the log. Restores the
+ * quit/install flags when the install never happens.
+ */
+const installDownloadedUpdate = () => new Promise((resolve, reject) => {
+  let settled = false;
+
+  const rollbackQuitState = () => {
+    state.quitRequested = false;
+    state.installingUpdate = false;
+  };
+
+  const fail = (error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(graceTimer);
+    autoUpdater.off('error', fail);
+    rollbackQuitState();
+    log.error('[electron] update install failed', error);
+    reject(error instanceof Error ? error : new Error(String(error)));
+  };
+
+  // Still running after the grace period: the install is underway and the app
+  // is shutting down, so release the pending IPC reply.
+  const graceTimer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    autoUpdater.off('error', fail);
+    resolve(null);
+  }, UPDATE_INSTALL_GRACE_MS);
+
+  autoUpdater.on('error', fail);
+
+  // Defer so the renderer's invoke channel is idle before the app starts
+  // shutting down.
+  setImmediate(() => {
+    try {
+      killSidecar();
+      autoUpdater.quitAndInstall();
+    } catch (error) {
+      fail(error);
     }
-    return relevant.length > 0 ? relevant.join('\n\n') : null;
-  } catch {
-    return null;
-  }
-};
+  });
+});
+
+const parseRelevantChangelogNotes = (fromVersion, toVersion) => fetchUpdateNotes(fromVersion, toVersion, compareSemver);
 
 const buildInstalledAppsCachePath = () => path.join(path.dirname(settingsFilePath()), INSTALLED_APPS_CACHE_FILE);
 
@@ -3787,6 +3884,7 @@ const runSpecChain = (specs, appName) => {
 // The tunnel client lives in the web package (it already has a WebSocket
 // client) and is loaded only if the user actually previews a remote dev server.
 let devTunnelClientPromise = null;
+const relayDevTunnelBridge = createRelayDevTunnelBridge({ createMessageChannel: () => new MessageChannelMain(), logger: log });
 const getDevTunnelClient = async () => {
   if (!devTunnelClientPromise) {
     devTunnelClientPromise = import('@openchamber/web/server/lib/dev-tunnel/client.js')
@@ -3800,6 +3898,7 @@ const getDevTunnelClient = async () => {
 };
 
 const closeAllDevTunnels = () => {
+  relayDevTunnelBridge.closeAll();
   if (!devTunnelClientPromise) return;
   const pending = devTunnelClientPromise;
   devTunnelClientPromise = null;
@@ -3907,6 +4006,11 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       if (!baseUrl) throw new Error('baseUrl is required');
       if (!(port > 0 && port <= 65535)) throw new Error('A valid port is required');
 
+      if (args.relay === true) {
+        const targetKey = typeof args.targetKey === 'string' ? args.targetKey.trim() : '';
+        return relayDevTunnelBridge.open({ targetKey, remotePort: port, webContents: browserWindow?.webContents });
+      }
+
       const headers = {};
       const requestHeaders = args.requestHeaders && typeof args.requestHeaders === 'object' ? args.requestHeaders : {};
       for (const [name, value] of Object.entries(requestHeaders)) {
@@ -3928,6 +4032,9 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       const client = await getDevTunnelClient();
       return { closed: client.close({ baseUrl, port }) };
     }
+
+    case 'desktop_relay_dev_tunnel_close_all':
+      return { closed: relayDevTunnelBridge.closeForWebContents(browserWindow?.webContents.id) };
 
     /**
      * Forces prefers-color-scheme for one previewed page.
@@ -4340,11 +4447,13 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       }
       const cachedApps = Array.isArray(cache?.apps) ? cache.apps : [];
       const hasCache = Boolean(cache);
-      const isCacheStale = !cache || (now - Number(cache.updatedAt || 0)) > INSTALLED_APPS_CACHE_TTL_SECS;
+      const isCacheStale = !cache
+        || cache.version !== INSTALLED_APPS_CACHE_VERSION
+        || (now - Number(cache.updatedAt || 0)) > INSTALLED_APPS_CACHE_TTL_SECS;
       const refresh = async () => {
         const apps = await buildPlatformInstalledApps(Array.isArray(args.apps) ? args.apps : []);
         await fsp.mkdir(path.dirname(cachePath), { recursive: true });
-        await fsp.writeFile(cachePath, JSON.stringify({ updatedAt: now, apps }, null, 2));
+        await fsp.writeFile(cachePath, JSON.stringify({ version: INSTALLED_APPS_CACHE_VERSION, updatedAt: now, apps }, null, 2));
         emitToAllWindows('openchamber:installed-apps-updated', apps);
       };
       if (process.platform !== 'darwin' && process.platform !== 'win32' && process.platform !== 'linux') {
@@ -4399,6 +4508,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       });
 
     case 'desktop_passkey_status': {
+      if (args.relay === true) return null;
       if (process.platform !== 'win32') return null;
       const targetUrl = normalizeHostUrl(String(args.url || ''));
       if (!targetUrl) return null;
@@ -4411,6 +4521,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     }
 
     case 'desktop_authenticate_with_passkey': {
+      if (args.relay === true) return { supported: false };
       const targetUrl = normalizeHostUrl(String(args.url || ''));
       if (!targetUrl) return { supported: process.platform === 'win32', ok: false, error: 'Invalid URL' };
       const localRuntime = isLocalRuntimeUrl(targetUrl);
@@ -4437,6 +4548,21 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     case 'desktop_set_window_theme': {
       const mode = typeof args.themeMode === 'string' ? args.themeMode : '';
       const variant = typeof args.themeVariant === 'string' ? args.themeVariant : '';
+      const splash = args.splash && typeof args.splash === 'object' ? args.splash : null;
+      if (splash) {
+        const colors = {};
+        for (const key of ['bgLight', 'fgLight', 'bgDark', 'fgDark']) {
+          if (typeof splash[key] === 'string' && splash[key].trim()) colors[key] = splash[key].trim();
+        }
+        if (Object.keys(colors).length === 4) {
+          const current = readSettingsRoot().desktopSplashColors;
+          const unchanged = current && typeof current === 'object'
+            && ['bgLight', 'fgLight', 'bgDark', 'fgDark'].every((key) => current[key] === colors[key]);
+          if (!unchanged) {
+            void mutateSettingsRoot((root) => ({ ...root, desktopSplashColors: colors }));
+          }
+        }
+      }
       // Priority order: themeMode expresses the user's intent (including
       // "follow OS"). Variant is just the resolved variant at send time;
       // when mode === 'system' with variant === 'dark' (because OS is
@@ -4523,9 +4649,20 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
             const onError = (error) => finish(reject, error);
             autoUpdater.on('update-downloaded', onDownloaded);
             autoUpdater.on('error', onError);
-            Promise.resolve(autoUpdater.downloadUpdate()).catch((error) => finish(reject, error));
+            // downloadUpdate() resolves once the payload is on disk. It stays
+            // the authoritative signal: when the file was already cached the
+            // updater emits no 'update-downloaded', and waiting only for the
+            // event left this promise pending and its listeners attached on
+            // every retry.
+            Promise.resolve(autoUpdater.downloadUpdate())
+              .then(() => finish(resolve, null))
+              .catch((error) => finish(reject, error));
           });
         }
+        // The 'update-downloaded' event does not fire for an already cached
+        // payload, so record the payload as ready here too; otherwise restart
+        // would relaunch without installing anything.
+        state.pendingUpdate.downloaded = true;
         emitToAllWindows('openchamber:update-progress', mapUpdaterProgressEvent({
           event: 'Finished',
           data: {},
@@ -4562,20 +4699,16 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
           } catch {
           }
         }
+        return await installDownloadedUpdate();
       }
       // Defer so the IPC reply flushes before the app starts shutting down.
-      // Without this, quitAndInstall() can race with the renderer's pending
-      // invoke and the restart appears to do nothing from the UI side.
+      // Without this, relaunch can race with the renderer's pending invoke and
+      // the restart appears to do nothing from the UI side.
       setImmediate(() => {
         try {
-          if (applyUpdate) {
-            killSidecar();
-            autoUpdater.quitAndInstall();
-          } else {
-            prepareForQuit();
-            app.relaunch();
-            app.exit(0);
-          }
+          prepareForQuit();
+          app.relaunch();
+          app.exit(0);
         } catch (err) {
           log.error('[electron] desktop_restart failed', err);
         }

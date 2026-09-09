@@ -114,7 +114,10 @@ const buildWindowSetupScript = ({ title, cancelLabel, hostname, theme }) => `(()
   cancel.type = 'button';
   cancel.textContent = config.cancelLabel;
   window.__openchamberPasskeyAbort = new AbortController();
-  cancel.addEventListener('click', () => window.__openchamberPasskeyAbort.abort());
+  cancel.addEventListener('click', () => {
+    window.__openchamberPasskeyAbort.abort();
+    window.close();
+  });
   main.append(product, heading, host, spinner, cancel);
   document.body.append(main);
   return true;
@@ -153,14 +156,18 @@ const buildCeremonyScript = (verificationPayload) => `(async () => {
     return typeof payload?.error === 'string' && payload.error.trim() ? payload.error.trim() : fallback;
   };
   try {
+    const signal = window.__openchamberPasskeyAbort.signal;
     await new Promise(resolve => requestAnimationFrame(() => resolve()));
+    signal.throwIfAborted();
     const optionsResponse = await fetch(${JSON.stringify(PASSKEY_OPTIONS_PATH)}, {
       method: 'POST',
+      signal,
       credentials: 'include',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     });
     if (!optionsResponse.ok) throw new Error(await readError(optionsResponse, 'Passkey sign-in is not available right now.'));
     const { requestId, optionsJSON } = await optionsResponse.json();
+    signal.throwIfAborted();
     const publicKey = typeof PublicKeyCredential.parseRequestOptionsFromJSON === 'function'
       ? PublicKeyCredential.parseRequestOptionsFromJSON(optionsJSON)
       : {
@@ -177,6 +184,7 @@ const buildCeremonyScript = (verificationPayload) => `(async () => {
     if (!credential) throw new Error('Passkey sign-in was canceled.');
     const verifyResponse = await fetch(${JSON.stringify(PASSKEY_VERIFY_PATH)}, {
       method: 'POST',
+      signal,
       credentials: 'include',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -187,6 +195,7 @@ const buildCeremonyScript = (verificationPayload) => `(async () => {
     });
     if (!verifyResponse.ok) throw new Error(await readError(verifyResponse, 'Passkey sign-in failed.'));
     const payload = await verifyResponse.json().catch(() => null);
+    signal.throwIfAborted();
     return { ok: true, token: typeof payload?.clientToken === 'string' ? payload.clientToken : '' };
   } catch (error) {
     if (window.__openchamberPasskeyAbort.signal.aborted || error?.name === 'AbortError' || error?.name === 'NotAllowedError') {
@@ -204,6 +213,7 @@ const configureRuntimeHeaders = (targetSession, origin, requestHeaders) => {
 };
 
 const clearTemporarySession = async (targetSession) => {
+  targetSession.webRequest.onBeforeSendHeaders(null);
   await Promise.allSettled([
     targetSession.clearStorageData(),
     targetSession.clearCache(),
@@ -302,15 +312,16 @@ export const authenticateWithDesktopPasskey = async ({
   authWindow.once('closed', () => finish({ supported: true, ok: false, cancelled: true }));
   const timeout = setTimeout(cancel, timeoutMs);
 
-  try {
+  const runCeremony = async () => {
     await authWindow.loadURL(statusUrl);
+    if (settled) return;
     await authWindow.webContents.executeJavaScript(buildWindowSetupScript({
       title: isStringValue(ui.title) ? ui.title : '',
       cancelLabel: isStringValue(ui.cancelLabel) ? ui.cancelLabel : '',
       hostname: new URL(origin).host,
       theme: isPlainObject(ui.theme) ? ui.theme : {},
     }));
-    if (!authWindow.isDestroyed()) {
+    if (!settled && !authWindow.isDestroyed()) {
       authWindow.show();
       authWindow.focus();
       const result = await authWindow.webContents.executeJavaScript(buildCeremonyScript({
@@ -323,15 +334,18 @@ export const authenticateWithDesktopPasskey = async ({
         ? { supported: true, ok: true, token: result.token }
         : { supported: true, ok: false, ...(result?.cancelled ? { cancelled: true } : { error: result?.error || 'Passkey sign-in failed.' }) });
     }
-  } catch (error) {
+  };
+
+  // Closing a window need not settle Electron's executeJavaScript promise.
+  void runCeremony().catch((error) => {
     finish({ supported: true, ok: false, error: error instanceof Error ? error.message : String(error) });
+  });
+  try {
+    return await resultPromise;
   } finally {
     clearTimeout(timeout);
     ownerWindow?.removeListener('closed', parentClosed);
+    if (activeAuthentication?.cancel === cancel) activeAuthentication = null;
+    await clearTemporarySession(targetSession);
   }
-
-  const result = await resultPromise;
-  if (activeAuthentication?.cancel === cancel) activeAuthentication = null;
-  await clearTemporarySession(targetSession);
-  return result;
 };

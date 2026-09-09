@@ -265,6 +265,7 @@ mock.module('@/lib/desktop', () => ({
     if (desktopPasskeySupported) void desktopInvoke('desktop_cancel_passkey_authentication');
   },
   getDesktopPasskeyStatus: (url: string, requestHeaders: Record<string, string>) => desktopInvoke('desktop_passkey_status', { url, requestHeaders }),
+  getDesktopPasskeyTargetUrl: () => runtimeApiBaseUrl,
   invokeDesktop: (command: string, args?: DesktopMockInvokeArgs) => desktopInvoke(command, args),
   isDesktopShell: mock(() => desktopShell),
   isVSCodeRuntime: mock(() => false),
@@ -342,8 +343,22 @@ mock.module('@/lib/passkeys', () => ({
   cancelPasskeyCeremony: mock(() => undefined),
   defaultPasskeyStatus: { enabled: false, hasPasskeys: false, passkeyCount: 0, rpID: null },
   fetchPasskeyStatus: mock(() => Promise.resolve({ enabled: false, hasPasskeys: false, passkeyCount: 0, rpID: null })),
+  getPasskeySupportState: () => ({ supported: false, reason: '' }),
   isPasskeyCeremonyAbort: mock(() => false),
   registerCurrentDevicePasskey: mock(() => Promise.resolve(null)),
+}));
+
+const authSessionStore = {
+  state: 'ok' as const,
+  markAuthenticated: mock(() => undefined),
+};
+
+mock.module('@/lib/runtime-auth-expiry', () => ({
+  installAuthSessionFocusWatch: mock(() => undefined),
+  useAuthSessionStore: Object.assign(
+    (selector: (store: typeof authSessionStore) => unknown) => selector(authSessionStore),
+    { getState: () => authSessionStore },
+  ),
 }));
 
 const { SessionAuthGate } = await import('./SessionAuthGate');

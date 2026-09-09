@@ -7,6 +7,7 @@ import { toast } from '@/components/ui';
 import {
   cancelDesktopPasskeyAuthentication,
   getDesktopPasskeyStatus,
+  getDesktopPasskeyTargetUrl,
   invokeDesktop,
   isDesktopShell,
   isVSCodeRuntime,
@@ -32,6 +33,7 @@ import {
   cancelPasskeyCeremony,
   defaultPasskeyStatus,
   fetchPasskeyStatus,
+  getPasskeySupportState,
   isPasskeyCeremonyAbort,
   type PasskeyStatus,
   registerCurrentDevicePasskey,
@@ -175,12 +177,6 @@ const captureRuntimeIdentity = (): RuntimeIdentity => ({
   apiBaseUrl: getRuntimeApiBaseUrl(),
   runtimeKey: getRuntimeKey(),
 });
-
-const getDesktopPasskeyTargetUrl = (): string => {
-  const apiBaseUrl = getRuntimeApiBaseUrl();
-  if (apiBaseUrl) return apiBaseUrl;
-  return getRuntimeKey() === 'local' ? readLocalOrigin() : '';
-};
 
 const readDesktopPasskeyTheme = (): DesktopPasskeyTheme => {
   const styles = window.getComputedStyle(window.document.documentElement);
@@ -368,7 +364,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
 }) => {
   const { t } = useI18n();
   const vscodeRuntime = React.useMemo(() => isVSCodeRuntime(), []);
-  const desktopPasskeySupported = React.useMemo(() => supportsDesktopPasskeyAuthentication(), []);
+  const desktopPasskeySupported = supportsDesktopPasskeyAuthentication();
   const skipAuth = vscodeRuntime;
   const showHostSwitcher = React.useMemo(() => isDesktopShell() && !vscodeRuntime, [vscodeRuntime]);
   const [state, setState] = React.useState<GateState>(() => (skipAuth ? 'authenticated' : 'pending'));
@@ -378,7 +374,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
   const [retryAfter, setRetryAfter] = React.useState<number | undefined>(undefined);
   const [isTunnelLocked, setIsTunnelLocked] = React.useState(false);
   const [passkeyStatus, setPasskeyStatus] = React.useState<PasskeyStatus>(defaultPasskeyStatus);
-  const [supportsPasskeys, setSupportsPasskeys] = React.useState(desktopPasskeySupported);
+  const [supportsPasskeys, setSupportsPasskeys] = React.useState(false);
   const [isPasskeyBusy, setIsPasskeyBusy] = React.useState(false);
   const [trustDevice, setTrustDevice] = React.useState<boolean>(() => readStoredTrustDevice());
   const [activePasskeyAction, setActivePasskeyAction] = React.useState<'auth' | 'register' | null>(null);
@@ -399,7 +395,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
     }
 
     try {
-      if (desktopPasskeySupported) {
+      if (supportsDesktopPasskeyAuthentication()) {
         const desktopStatus = await getDesktopPasskeyStatus(
           getDesktopPasskeyTargetUrl(),
           getRuntimeExtraHeadersSync(),
@@ -422,7 +418,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
       }
       return defaultPasskeyStatus;
     }
-  }, [desktopPasskeySupported, skipAuth]);
+  }, [skipAuth]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -431,14 +427,9 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
       return;
     }
 
-    if (desktopPasskeySupported) {
-      setSupportsPasskeys(true);
-      return;
-    }
-
     void (async () => {
       try {
-        if (!window.isSecureContext || !browserSupportsWebAuthn()) {
+        if (!getPasskeySupportState().supported || !browserSupportsWebAuthn()) {
           if (!cancelled) {
             setSupportsPasskeys(false);
           }
@@ -651,7 +642,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
       hasBootstrapResyncedRef.current = true;
       void (async () => {
         await initializeAppearancePreferences();
-        await syncDesktopSettings({ adoptWorkspace: isBootstrapResync });
+        await syncDesktopSettings({ bootstrap: isBootstrapResync });
         if (isBootstrapResync) {
           await applyPersistedDirectoryPreferences();
         }
@@ -829,7 +820,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
   }, [cancelActivePasskey, isPasskeyBusy, isSubmitting, isTunnelLocked, password, registerPasskeyForCurrentSession, supportsPasskeys, t, trustDevice]);
 
   const handlePasskeyUnlock = React.useCallback(async () => {
-    if (isSubmitting || !supportsPasskeys) {
+    if (isSubmitting || (!supportsPasskeys && !supportsDesktopPasskeyAuthentication())) {
       return;
     }
 
@@ -846,7 +837,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
 
     try {
       let clientToken = '';
-      if (desktopPasskeySupported) {
+      if (supportsDesktopPasskeyAuthentication()) {
         const result = await requestDesktopPasskeyAuthentication({
           url: getDesktopPasskeyTargetUrl(),
           trustDevice,
@@ -891,7 +882,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
         setIsPasskeyBusy(false);
       }
     }
-  }, [cancelActivePasskey, desktopPasskeySupported, isPasskeyBusy, isSubmitting, supportsPasskeys, t, trustDevice]);
+  }, [cancelActivePasskey, isPasskeyBusy, isSubmitting, supportsPasskeys, t, trustDevice]);
 
   const handlePasskeySetupOnly = React.useCallback(async () => {
     if (isSubmitting || isTunnelLocked || !supportsPasskeys) {
@@ -927,7 +918,7 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({
   }, [cancelActivePasskey, handlePasswordUnlock, isPasskeyBusy, isSubmitting, isTunnelLocked, password, registerPasskeyForCurrentSession, state, supportsPasskeys, t]);
 
   const canOfferPasskeySetup = supportsPasskeys && passkeyStatus.enabled;
-  const canUsePasskey = canOfferPasskeySetup && passkeyStatus.hasPasskeys;
+  const canUsePasskey = (supportsPasskeys || desktopPasskeySupported) && passkeyStatus.enabled && passkeyStatus.hasPasskeys;
 
   if (state === 'pending') {
     return <LoadingScreen />;

@@ -80,7 +80,7 @@ export const getPasskeySupportState = () => {
     return { supported: false, reason: 'Passkeys are unavailable outside the browser.' };
   }
 
-  if (!window.isSecureContext) {
+  if (!window.isSecureContext || !['http:', 'https:'].includes(window.location.protocol)) {
     return { supported: false, reason: 'Passkeys require HTTPS or localhost.' };
   }
 
