@@ -953,7 +953,7 @@ const fetchCodexQuota = async (): Promise<ProviderResult> => {
       const valueLabel = unlimited
         ? 'Unlimited'
         : balance !== null
-          ? `$${formatMoney(balance)}`
+          ? String(balance)
           : null;
       windows.credits_balance = toUsageWindow({
         usedPercent: null,
